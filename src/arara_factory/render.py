@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import shutil
+import sys
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -34,9 +35,16 @@ def _escape_filter_path(path: Path) -> str:
     return str(path.resolve()).replace('\\','/').replace(':','\\:').replace("'", "\\'")
 
 
+def _binary(name: str) -> str | None:
+    bundled = Path(getattr(sys, '_MEIPASS', Path.cwd())) / (name + ('.exe' if sys.platform == 'win32' else ''))
+    if bundled.exists():
+        return str(bundled)
+    return shutil.which(name)
+
+
 def render_reels(source: Path, brainrot_dir: Path, output_dir: Path, options: RenderOptions, progress=lambda n,s:None, log=lambda s:None) -> list[Path]:
-    ffmpeg=shutil.which('ffmpeg')
-    ffprobe=shutil.which('ffprobe')
+    ffmpeg=_binary('ffmpeg')
+    ffprobe=_binary('ffprobe')
     if not ffmpeg or not ffprobe:
         raise RuntimeError('FFmpeg не найден. Установи FFmpeg и добавь его в PATH.')
     output_dir.mkdir(parents=True,exist_ok=True)
