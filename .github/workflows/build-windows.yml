@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'launcher.py'
       - 'pyproject.toml'
       - '.github/workflows/build-windows.yml'
 
@@ -31,7 +32,7 @@ jobs:
           $probe = Get-ChildItem ffmpeg -Recurse -Filter ffprobe.exe | Select-Object -First 1
           Copy-Item $probe.FullName ffprobe.exe
       - name: Build EXE
-        run: pyinstaller --noconfirm --clean --windowed --onefile --name "ARARA-Factory" --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." src/arara_factory/app.py
+        run: pyinstaller --noconfirm --clean --windowed --onefile --name "ARARA-Factory" --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." launcher.py
       - uses: actions/upload-artifact@v4
         with:
           name: ARARA-Factory-Windows
