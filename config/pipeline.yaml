@@ -1,0 +1,24 @@
+project: arara
+canvas:
+  width: 1080
+  height: 1920
+  fps: 30
+variants: 5
+commands:
+  ARARA:
+    subtitle: center_pop
+    zoom: 1.10
+  RARA:
+    cutaway: random_brainrot
+  RARARA:
+    cuts: 3
+    sfx: triple_impact
+  ARARARA:
+    montage: chaos
+    shake: strong
+subtitles:
+  preset: arara_capcut_v1
+  words_per_chunk: 1
+render:
+  codec: h264
+  crf: 20
