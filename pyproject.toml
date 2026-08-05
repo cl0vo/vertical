@@ -1,16 +1,19 @@
 [project]
 name = "arara-factory"
-version = "0.1.0"
-description = "Local ARARA reels assembly pipeline"
+version = "0.2.0"
+description = "Local ARARA vertical brainrot reels assembly app"
 requires-python = ">=3.11"
 dependencies = [
+  "numpy>=1.26",
   "pydantic>=2.7",
+  "PySide6>=6.7",
   "typer>=0.12",
   "pyyaml>=6.0",
 ]
 
 [project.scripts]
 arara-factory = "arara_factory.cli:app"
+arara-factory-gui = "arara_factory.app:main"
 
 [build-system]
 requires = ["hatchling"]
