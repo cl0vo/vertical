@@ -1,0 +1,7 @@
+{
+  "name": "basic_brainrot",
+  "cutaway_interval_sec": [2.5, 5.0],
+  "cutaway_duration_sec": [0.4, 1.3],
+  "zoom_on_command": true,
+  "loop_ending": true
+}
