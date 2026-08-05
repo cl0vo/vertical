@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+input/*
+!input/.gitkeep
+brainrot/*
+!brainrot/.gitkeep
+sounds/*
+!sounds/.gitkeep
+output/*
+!output/.gitkeep
