@@ -1,5 +1,5 @@
 #define MyAppName "ARARA Factory"
-#define MyAppVersion "0.9.0"
+#define MyAppVersion "0.10.0"
 #define MyAppPublisher "ARARA"
 #define MyAppExeName "ARARA-Factory.exe"
 
@@ -23,7 +23,9 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
-RestartApplications=no
+RestartApplications=yes
+UsePreviousAppDir=yes
+UsePreviousTasks=yes
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
