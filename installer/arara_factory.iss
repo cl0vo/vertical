@@ -1,5 +1,5 @@
 #define MyAppName "ARARA Factory"
-#define MyAppVersion "0.13.1"
+#define MyAppVersion "0.14.0"
 #define MyAppPublisher "ARARA"
 #define MyAppExeName "ARARA-Factory.exe"
 
@@ -32,16 +32,17 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Ярлыки:"; Flags: checkedonce
-Name: "desktopbatch"; Description: "Создать ярлык часовой записи"; GroupDescription: "Ярлыки:"; Flags: unchecked
 
 [Files]
 Source: "..\dist\ARARA-Factory\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+Type: files; Name: "{autoprograms}\ARARA Factory — часовая запись.lnk"
+Type: files; Name: "{autodesktop}\ARARA Factory — часовая запись.lnk"
+
 [Icons]
 Name: "{autoprograms}\ARARA Factory"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autoprograms}\ARARA Factory — часовая запись"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--batch"
 Name: "{autodesktop}\ARARA Factory"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
-Name: "{autodesktop}\ARARA Factory — часовая запись"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--batch"; Tasks: desktopbatch
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Запустить ARARA Factory"; Flags: nowait postinstall
