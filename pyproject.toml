@@ -1,6 +1,6 @@
 [project]
 name = "arara-factory"
-version = "0.11.0"
+version = "0.11.1"
 description = "Personal Windows app for CapCut-style ARARA reels and resumable hour-long batches"
 requires-python = ">=3.11"
 dependencies = [
