@@ -38,9 +38,11 @@ def main() -> None:
     from .publishing_ui import install as install_publishing
     from .publishing_oauth_ui import install as install_publishing_oauth
     from .publishing_runtime_ui import install as install_publishing_runtime
+    from .publishing_library_ui import install as install_publishing_library
 
     install_batch(app_module)
     install_publishing(app_module)
     install_publishing_oauth(app_module)
     install_publishing_runtime(app_module)
+    install_publishing_library(app_module)
     app_module.main()
