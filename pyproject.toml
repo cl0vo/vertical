@@ -1,7 +1,7 @@
 [project]
 name = "arara-factory"
-version = "0.10.0"
-description = "Personal Windows app with embedded preview, zoomed brainrot, offline Russian subtitles and one-click updates"
+version = "0.10.1"
+description = "Personal Windows app with embedded preview, zoomed brainrot, ARARA pulse-timed subtitles and one-click updates"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
