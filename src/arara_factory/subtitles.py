@@ -137,24 +137,36 @@ def write_word_ass(
     target.write_text(_header(font) + '\n'.join(lines) + '\n', encoding='utf-8-sig')
 
 
+def arara_words_from_pulses(
+    pulses: list[Pulse],
+    pattern: tuple[str, ...] = TOKENS,
+) -> list[RecognizedWord]:
+    """Turn voice activity into timed ARARA words without speech recognition.
+
+    The user's performance is intentionally made from brand syllables that normal
+    Russian ASR often treats as unknown.  We therefore preserve the actual audio
+    timing and cycle through the canonical visible tokens.
+    """
+    if not pattern:
+        pattern = TOKENS
+    words: list[RecognizedWord] = []
+    for index, pulse in enumerate(pulses):
+        start = max(0.0, float(pulse.start))
+        end = max(start + 0.12, float(pulse.end))
+        words.append(
+            RecognizedWord(
+                text=pattern[index % len(pattern)],
+                start=start,
+                end=end,
+                confidence=1.0,
+            )
+        )
+    return words
+
+
 def token_for(pulse: Pulse, index: int) -> str:
-    duration = pulse.end - pulse.start
-    if duration > .62:
-        return 'ARARARA'
-    if duration > .43:
-        return 'RARARA'
-    if duration < .24:
-        return 'RARA'
     return TOKENS[index % len(TOKENS)]
 
 
 def write_capcut_ass(pulses: list[Pulse], target: Path, font: str = 'Arial Black', y: int = 1050) -> None:
-    lines: list[str] = []
-    for index, pulse in enumerate(pulses):
-        current = token_for(pulse, index)
-        tags = rf'{{\an2\pos(540,{y})\bord7\shad2\fad(25,45)}}'
-        end = max(pulse.end, pulse.start + .18)
-        lines.append(
-            f'Dialogue: 0,{ass_time(pulse.start)},{ass_time(end)},Base,,0,0,0,,{tags}{current}'
-        )
-    target.write_text(_header(font) + '\n'.join(lines) + '\n', encoding='utf-8-sig')
+    write_word_ass(arara_words_from_pulses(pulses), target, font, y)
