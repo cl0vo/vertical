@@ -20,9 +20,9 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -35,7 +35,7 @@ jobs:
       - name: Validate application
         run: |
           python -m compileall -q src launcher.py
-          python -c "import arara_factory.app; import arara_factory.render; import arara_factory.brainrot_index; print('ARARA imports OK')"
+          python -c "import vosk; import arara_factory.app; import arara_factory.render; import arara_factory.transcribe; print('ARARA imports OK')"
           pytest -q
 
       - name: Download FFmpeg
@@ -49,6 +49,16 @@ jobs:
           Copy-Item $bin.FullName ffmpeg.exe
           Copy-Item $probe.FullName ffprobe.exe
 
+      - name: Download offline Russian subtitle model
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path assets | Out-Null
+          Invoke-WebRequest https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip -OutFile vosk-model.zip
+          Expand-Archive vosk-model.zip -DestinationPath assets
+          if (-not (Test-Path 'assets\vosk-model-small-ru-0.22\am')) {
+            throw 'Russian Vosk model was not downloaded correctly'
+          }
+
       - name: Build portable application
         shell: powershell
         run: |
@@ -59,10 +69,12 @@ jobs:
             '--onefile',
             '--name', 'ARARA-Factory',
             '--paths', 'src',
+            '--collect-all', 'vosk',
             '--add-binary', 'ffmpeg.exe;.',
-            '--add-binary', 'ffprobe.exe;.'
+            '--add-binary', 'ffprobe.exe;.',
+            '--add-data', 'assets\vosk-model-small-ru-0.22;assets\vosk-model-small-ru-0.22',
+            'launcher.py'
           )
-          $pyiArgs += 'launcher.py'
           python -m PyInstaller @pyiArgs
 
       - name: Install Inno Setup
@@ -84,14 +96,14 @@ jobs:
           }
 
       - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ARARA-Factory-Installer
           path: installer-output/ARARA-Factory-Setup.exe
           if-no-files-found: error
 
       - name: Upload portable version
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ARARA-Factory-Portable
           path: dist/ARARA-Factory.exe
