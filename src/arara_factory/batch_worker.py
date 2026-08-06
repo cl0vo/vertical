@@ -100,13 +100,17 @@ class BatchRenderWorker(QThread):
             self.completed.emit([], plan)
             return
 
+        if self._stop_requested():
+            self.stopped.emit([], plan)
+            return
+
         self._check_disk_space(info.duration, todo)
         outputs: list[str] = []
         total = len(todo)
         render_share = 100 - self.ANALYSIS_SHARE
 
         for position, segment in enumerate(todo):
-            if self._stop_requested() and position > 0:
+            if self._stop_requested():
                 self.stopped.emit(outputs, plan)
                 return
 
