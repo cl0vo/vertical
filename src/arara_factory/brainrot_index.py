@@ -176,17 +176,21 @@ def choose_segment(
     return IndexedSegment(start=start, duration=wanted, index=selected)
 
 
-def mark_segment_used(video: Path, segment_index: int) -> None:
+def mark_segment_used(video: Path, segment_index: int) -> bool:
     if segment_index < 0:
-        return
+        return False
     target = index_path(video)
     if not target.exists():
-        return
-    payload = json.loads(target.read_text(encoding='utf-8'))
-    segments = payload.get('segments') or []
-    if segment_index >= len(segments):
-        return
-    used = set(payload.get('used') or [])
-    used.add(int(segment_index))
-    payload['used'] = sorted(used)
-    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+        return False
+    try:
+        payload = json.loads(target.read_text(encoding='utf-8'))
+        segments = payload.get('segments') or []
+        if segment_index >= len(segments):
+            return False
+        used = set(payload.get('used') or [])
+        used.add(int(segment_index))
+        payload['used'] = sorted(used)
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+        return True
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
