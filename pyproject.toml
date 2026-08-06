@@ -1,7 +1,7 @@
 [project]
 name = "arara-factory"
-version = "0.13.1"
-description = "Personal Windows app with silent background FFmpeg jobs and live batch progress"
+version = "0.14.0"
+description = "One-window ARARA workflow with safe resumable batches and simple three-step creation"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
@@ -15,7 +15,7 @@ dependencies = [
 [project.scripts]
 arara-factory = "arara_factory.cli:app"
 arara-factory-gui = "arara_factory.app:main"
-arara-factory-batch = "arara_factory.batch_app:main"
+arara-factory-batch = "arara_factory.app:main"
 
 [build-system]
 requires = ["hatchling"]
