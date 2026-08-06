@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from .audio import detect_pulses, extract_wav
@@ -145,13 +146,20 @@ def _binary(name: str) -> str | None:
     return shutil.which(name)
 
 
-def probe_media(ffprobe: str, path: Path) -> MediaInfo:
+@lru_cache(maxsize=64)
+def _probe_media_cached(
+    ffprobe: str,
+    resolved_path: str,
+    size: int,
+    mtime_ns: int,
+) -> MediaInfo:
+    del size, mtime_ns
     cmd = [
         ffprobe,
         '-v', 'error',
         '-show_entries', 'stream=codec_type,width,height,r_frame_rate:format=duration',
         '-of', 'json',
-        str(path),
+        resolved_path,
     ]
     process = run_hidden(cmd, text=True, capture_output=True)
     if process.returncode:
@@ -173,6 +181,16 @@ def probe_media(ffprobe: str, path: Path) -> MediaInfo:
         raise RuntimeError('Не удалось определить формат видео.') from exc
 
 
+def probe_media(ffprobe: str, path: Path) -> MediaInfo:
+    stat = path.stat()
+    return _probe_media_cached(
+        ffprobe,
+        str(path.resolve()),
+        int(stat.st_size),
+        int(stat.st_mtime_ns),
+    )
+
+
 def output_duration(source_duration: float, preview_seconds: float | None = None) -> float:
     if source_duration < MIN_REEL_SECONDS - 0.05:
         raise RuntimeError(
@@ -192,6 +210,7 @@ def _brainrot_files(source: Path) -> list[Path]:
     return []
 
 
+@lru_cache(maxsize=8)
 def _has_nvenc(ffmpeg: str) -> bool:
     try:
         process = run_hidden(
@@ -237,8 +256,12 @@ def _safe_output(
     base = output_dir / f'{stem}_{label}_v{variant}.mp4'
     if not base.exists():
         return base
-    stamp = time.strftime('%H%M%S')
+    stamp = time.strftime('%H%M%S') + f'-{time.time_ns() % 1_000_000:06d}'
     return output_dir / f'{stem}_{label}_v{variant}_{stamp}.mp4'
+
+
+def _partial_output(final_output: Path) -> Path:
+    return final_output.with_name(f'{final_output.stem}.part{final_output.suffix}')
 
 
 def _validate_reel_format(info: MediaInfo) -> None:
@@ -406,13 +429,15 @@ def render_reels(
                 reel_duration,
                 seed=options.seed + variant + time.time_ns(),
             )
-            out = _safe_output(
+            final_out = _safe_output(
                 output_dir,
                 source,
                 variant,
                 bool(options.preview_seconds),
                 options.output_stem,
             )
+            partial_out = _partial_output(final_out)
+            partial_out.unlink(missing_ok=True)
             crop_x, crop_y, crop_w, crop_h = _zoom_crop(
                 brain_info,
                 brain_rect.width / brain_rect.height,
@@ -450,7 +475,7 @@ def render_reels(
                 '-af', 'asetpts=PTS-STARTPTS',
                 '-c:a', 'aac', '-b:a', '160k',
                 '-t', f'{reel_duration:.3f}',
-                '-movflags', '+faststart', '-shortest', str(out),
+                '-movflags', '+faststart', '-shortest', str(partial_out),
             ]
             encoder_args, encoder_name = _video_encoder_args(ffmpeg, options)
             log(f'Кодирование: {encoder_name}')
@@ -460,27 +485,36 @@ def render_reels(
                 progress(min(94, mapped), f'Кодирую Reel · {value}%')
 
             try:
-                _run(
-                    [*base_cmd, *encoder_args, *audio_args],
-                    log,
-                    duration=reel_duration,
-                    progress=encoding_progress,
-                )
-            except RuntimeError as exc:
-                if encoder_name != 'NVIDIA NVENC':
-                    raise
-                log(f'NVENC недоступен, повторяю на CPU: {exc}')
-                progress(12, 'NVIDIA недоступна · повторяю на CPU')
-                cpu_args, _ = _video_encoder_args(ffmpeg, options, force_cpu=True)
-                _run(
-                    [*base_cmd, *cpu_args, *audio_args],
-                    log,
-                    duration=reel_duration,
-                    progress=encoding_progress,
-                )
+                try:
+                    _run(
+                        [*base_cmd, *encoder_args, *audio_args],
+                        log,
+                        duration=reel_duration,
+                        progress=encoding_progress,
+                    )
+                except RuntimeError as exc:
+                    if encoder_name != 'NVIDIA NVENC':
+                        raise
+                    log(f'NVENC недоступен, повторяю на CPU: {exc}')
+                    progress(12, 'NVIDIA недоступна · повторяю на CPU')
+                    partial_out.unlink(missing_ok=True)
+                    cpu_args, _ = _video_encoder_args(ffmpeg, options, force_cpu=True)
+                    _run(
+                        [*base_cmd, *cpu_args, *audio_args],
+                        log,
+                        duration=reel_duration,
+                        progress=encoding_progress,
+                    )
+
+                if not partial_out.is_file() or partial_out.stat().st_size <= 0:
+                    raise RuntimeError('FFmpeg завершился без готового выходного файла.')
+                partial_out.replace(final_out)
+            except Exception:
+                partial_out.unlink(missing_ok=True)
+                raise
 
             progress(98, 'Сохраняю готовый файл')
-            made.append(out)
+            made.append(final_out)
 
     progress(100, 'Готово')
     return made
