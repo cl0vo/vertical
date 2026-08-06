@@ -57,11 +57,12 @@ class PublishJob:
     def pending_platforms(self) -> list[Platform]:
         result: list[Platform] = []
         for name, delivery in self.deliveries.items():
-            if delivery.status != "success":
-                try:
-                    result.append(Platform(name))
-                except ValueError:
-                    continue
+            if delivery.status == "success":
+                continue
+            try:
+                result.append(Platform(name))
+            except ValueError:
+                continue
         return result
 
 
@@ -81,9 +82,19 @@ def queue_path() -> Path:
 
 
 def _atomic_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")
     temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     temp.replace(path)
+
+
+def _caption_from_template(template: str, index: int, file: Path) -> str:
+    return (
+        template.replace("{n}", str(index))
+        .replace("{filename}", file.stem)
+        .replace("{file}", file.name)
+        .strip()
+    )
 
 
 class PublishQueue:
@@ -149,29 +160,30 @@ class PublishQueue:
         if not platforms:
             raise RuntimeError("Не выбрана ни одна платформа для публикации.")
         interval = max(15, int(interval_minutes)) * 60
-        start = float(start_at if start_at is not None else time.time())
+        now = time.time()
+        if start_at is not None:
+            start = float(start_at)
+        else:
+            unfinished = [job.due_at for job in self.jobs if not job.done]
+            start = max(now, max(unfinished) + interval) if unfinished else now
+
         existing = {
             (str(Path(job.video).resolve()).lower(), tuple(sorted(job.deliveries)))
             for job in self.jobs
-            if not job.done
         }
         added: list[PublishJob] = []
+        platform_names = tuple(sorted(platform.value for platform in platforms))
         for index, file in enumerate(files, start=1):
             if not file.is_file():
                 continue
-            platform_names = tuple(sorted(platform.value for platform in platforms))
-            key = (str(file.resolve()).lower(), platform_names)
+            resolved = str(file.resolve())
+            key = (resolved.lower(), platform_names)
             if key in existing:
                 continue
-            caption = caption_template.format(
-                n=index,
-                filename=file.stem,
-                file=file.name,
-            ).strip()
             job = PublishJob(
                 id=uuid.uuid4().hex,
-                video=str(file.resolve()),
-                caption=caption,
+                video=resolved,
+                caption=_caption_from_template(caption_template, index, file),
                 due_at=start + len(added) * interval,
                 created_at=time.time(),
                 deliveries={platform.value: DeliveryState() for platform in platforms},
@@ -301,7 +313,7 @@ def _upload_binary(
         raise RuntimeError(f"HTTP {exc.code}: {detail[-1200:]}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Ошибка загрузки: {exc.reason}") from exc
-    progress(80, "Видео передано платформе")
+    progress(78, "Видео передано платформе")
 
 
 def _refresh_tiktok(credentials: dict[str, Any]) -> dict[str, Any]:
@@ -321,26 +333,77 @@ def _refresh_tiktok(credentials: dict[str, Any]) -> dict[str, Any]:
             "refresh_token": credentials["refresh_token"],
         },
     )
-    credentials = dict(credentials)
-    credentials.update(
+    if result.get("error") and not result.get("access_token"):
+        raise RuntimeError(
+            "TikTok OAuth: "
+            + str(result.get("error_description") or result.get("error"))
+        )
+    updated = dict(credentials)
+    updated.update(
         {
             "access_token": result.get("access_token", ""),
             "refresh_token": result.get("refresh_token", credentials.get("refresh_token", "")),
             "expires_at": time.time() + int(result.get("expires_in") or 86400),
         }
     )
-    update_platform_credentials(Platform.TIKTOK.value, credentials)
-    return credentials
+    update_platform_credentials(Platform.TIKTOK.value, updated)
+    return updated
 
 
-def publish_tiktok(video: Path, caption: str, credentials: dict[str, Any], progress: Progress) -> str:
+def _wait_tiktok_status(
+    token: str,
+    publish_id: str,
+    progress: Progress,
+    *,
+    timeout: int = 240,
+) -> str:
+    deadline = time.time() + timeout
+    headers = {"Authorization": f"Bearer {token}"}
+    while time.time() < deadline:
+        result = _json_request(
+            "https://open.tiktokapis.com/v2/post/publish/status/fetch/",
+            method="POST",
+            headers=headers,
+            payload={"publish_id": publish_id},
+        )
+        error = result.get("error") or {}
+        if error.get("code") not in (None, "", "ok"):
+            raise RuntimeError(f"TikTok status: {error.get('message') or error.get('code')}")
+        data = result.get("data") or {}
+        status = str(data.get("status") or "")
+        if status == "PUBLISH_COMPLETE":
+            public_ids = data.get("publicaly_available_post_id") or []
+            progress(100, "TikTok · опубликовано")
+            return str(public_ids[0]) if public_ids else publish_id
+        if status == "FAILED":
+            raise RuntimeError(
+                "TikTok отклонил публикацию: "
+                + str(data.get("fail_reason") or "неизвестная причина")
+            )
+        progress(82, f"TikTok · обработка {status or 'PROCESSING'}")
+        time.sleep(3)
+
+    # The upload is already accepted. Returning publish_id avoids posting the same
+    # video twice merely because moderation took longer than the local wait window.
+    progress(100, "TikTok · принято, обработка продолжается")
+    return publish_id
+
+
+def publish_tiktok(
+    video: Path,
+    caption: str,
+    credentials: dict[str, Any],
+    progress: Progress,
+) -> str:
     credentials = _refresh_tiktok(credentials)
     token = str(credentials.get("access_token") or "")
     if not token:
         raise RuntimeError("TikTok не подключён: отсутствует access token.")
     size = video.stat().st_size
     if size > 64 * 1024 * 1024:
-        raise RuntimeError("TikTok: файл больше 64 МБ. Уменьши качество рендера.")
+        raise RuntimeError(
+            "TikTok: файл больше 64 МБ для однокусочной загрузки. Уменьши качество рендера."
+        )
 
     headers = {"Authorization": f"Bearer {token}"}
     creator = _json_request(
@@ -352,9 +415,12 @@ def publish_tiktok(video: Path, caption: str, credentials: dict[str, Any], progr
     error = creator.get("error") or {}
     if error.get("code") not in (None, "", "ok"):
         raise RuntimeError(f"TikTok: {error.get('message') or error.get('code')}")
-    options = ((creator.get("data") or {}).get("privacy_level_options") or [])
+    creator_data = creator.get("data") or {}
+    options = creator_data.get("privacy_level_options") or []
     preferred = str(credentials.get("privacy_level") or "PUBLIC_TO_EVERYONE")
-    privacy = preferred if preferred in options else ("SELF_ONLY" if "SELF_ONLY" in options else (options[0] if options else "SELF_ONLY"))
+    privacy = preferred if preferred in options else (
+        "SELF_ONLY" if "SELF_ONLY" in options else (options[0] if options else "SELF_ONLY")
+    )
 
     progress(5, "TikTok · создаю публикацию")
     initialized = _json_request(
@@ -365,9 +431,15 @@ def publish_tiktok(video: Path, caption: str, credentials: dict[str, Any], progr
             "post_info": {
                 "title": caption[:2200],
                 "privacy_level": privacy,
-                "disable_duet": bool(credentials.get("disable_duet", False)),
-                "disable_comment": bool(credentials.get("disable_comment", False)),
-                "disable_stitch": bool(credentials.get("disable_stitch", False)),
+                "disable_duet": bool(
+                    credentials.get("disable_duet", creator_data.get("duet_disabled", False))
+                ),
+                "disable_comment": bool(
+                    credentials.get("disable_comment", creator_data.get("comment_disabled", False))
+                ),
+                "disable_stitch": bool(
+                    credentials.get("disable_stitch", creator_data.get("stitch_disabled", False))
+                ),
                 "video_cover_timestamp_ms": 0,
                 "brand_content_toggle": bool(credentials.get("brand_content", False)),
                 "brand_organic_toggle": bool(credentials.get("brand_organic", False)),
@@ -383,7 +455,9 @@ def publish_tiktok(video: Path, caption: str, credentials: dict[str, Any], progr
     )
     error = initialized.get("error") or {}
     if error.get("code") != "ok":
-        raise RuntimeError(f"TikTok: {error.get('message') or error.get('code') or 'ошибка инициализации'}")
+        raise RuntimeError(
+            f"TikTok: {error.get('message') or error.get('code') or 'ошибка инициализации'}"
+        )
     data = initialized.get("data") or {}
     upload_url = str(data.get("upload_url") or "")
     publish_id = str(data.get("publish_id") or "")
@@ -401,16 +475,20 @@ def publish_tiktok(video: Path, caption: str, credentials: dict[str, Any], progr
         progress,
         method="PUT",
     )
-    progress(100, "TikTok · видео принято")
-    return publish_id
+    return _wait_tiktok_status(token, publish_id, progress)
 
 
-def publish_instagram(video: Path, caption: str, credentials: dict[str, Any], progress: Progress) -> str:
+def publish_instagram(
+    video: Path,
+    caption: str,
+    credentials: dict[str, Any],
+    progress: Progress,
+) -> str:
     token = str(credentials.get("access_token") or "")
     user_id = str(credentials.get("ig_user_id") or "")
     if not token or not user_id:
         raise RuntimeError("Instagram не подключён: нужны access token и IG User ID.")
-    version = str(credentials.get("api_version") or "v24.0")
+    version = str(credentials.get("api_version") or "v25.0")
     graph_host = str(credentials.get("graph_host") or "graph.instagram.com")
     base = f"https://{graph_host}/{version}"
 
@@ -447,10 +525,11 @@ def publish_instagram(video: Path, caption: str, credentials: dict[str, Any], pr
     )
 
     progress(82, "Instagram · обрабатываю видео")
-    deadline = time.time() + 180
+    deadline = time.time() + 240
     while time.time() < deadline:
         status = _json_request(
-            f"{base}/{container_id}?" + urllib.parse.urlencode(
+            f"{base}/{container_id}?"
+            + urllib.parse.urlencode(
                 {"fields": "status_code,status", "access_token": token}
             )
         )
@@ -485,24 +564,32 @@ def connect_youtube(client_secret_path: Path) -> dict[str, Any]:
     scopes = ["https://www.googleapis.com/auth/youtube.upload"]
     flow = InstalledAppFlow.from_client_secrets_file(str(client_secret_path), scopes)
     credentials = flow.run_local_server(port=0, open_browser=True, prompt="consent")
-    token = json.loads(credentials.to_json())
-    result = {"client_secret_path": str(client_secret_path.resolve()), "token": token}
+    result = {
+        "client_secret_path": str(client_secret_path.resolve()),
+        "token": json.loads(credentials.to_json()),
+    }
     update_platform_credentials(Platform.YOUTUBE.value, result)
     return result
 
 
-def publish_youtube(video: Path, caption: str, credentials: dict[str, Any], progress: Progress) -> str:
+def publish_youtube(
+    video: Path,
+    caption: str,
+    credentials: dict[str, Any],
+    progress: Progress,
+) -> str:
     try:
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
+        from googleapiclient.errors import HttpError
         from googleapiclient.http import MediaFileUpload
     except ImportError as exc:
         raise RuntimeError("В сборке отсутствуют модули YouTube API.") from exc
 
     token_info = credentials.get("token") or {}
     if not token_info:
-        raise RuntimeError("YouTube не подключён. Нажми «Подключить YouTube».")
+        raise RuntimeError("YouTube не подключён. Нажми «Подключения».")
     scopes = ["https://www.googleapis.com/auth/youtube.upload"]
     creds = Credentials.from_authorized_user_info(token_info, scopes=scopes)
     if creds.expired and creds.refresh_token:
@@ -511,7 +598,10 @@ def publish_youtube(video: Path, caption: str, credentials: dict[str, Any], prog
         updated["token"] = json.loads(creds.to_json())
         update_platform_credentials(Platform.YOUTUBE.value, updated)
 
-    title_line = next((line.strip() for line in caption.splitlines() if line.strip()), "ARARA")
+    title_line = next(
+        (line.strip() for line in caption.splitlines() if line.strip()),
+        "ARARA",
+    )
     title = title_line[:90]
     if "#shorts" not in title.lower():
         title = (title + " #shorts")[:100]
@@ -524,12 +614,19 @@ def publish_youtube(video: Path, caption: str, credentials: dict[str, Any], prog
         "status": {
             "privacyStatus": str(credentials.get("privacy_status") or "public"),
             "selfDeclaredMadeForKids": False,
-            "containsSyntheticMedia": bool(credentials.get("contains_synthetic_media", False)),
+            "containsSyntheticMedia": bool(
+                credentials.get("contains_synthetic_media", False)
+            ),
         },
     }
     progress(5, "YouTube · начинаю загрузку")
     service = build("youtube", "v3", credentials=creds, cache_discovery=False)
-    media = MediaFileUpload(str(video), mimetype="video/mp4", resumable=True, chunksize=8 * 1024 * 1024)
+    media = MediaFileUpload(
+        str(video),
+        mimetype="video/mp4",
+        resumable=True,
+        chunksize=8 * 1024 * 1024,
+    )
     request = service.videos().insert(
         part="snippet,status",
         body=body,
@@ -537,10 +634,22 @@ def publish_youtube(video: Path, caption: str, credentials: dict[str, Any], prog
         notifySubscribers=False,
     )
     response = None
+    retry = 0
     while response is None:
-        upload_status, response = request.next_chunk()
-        if upload_status is not None:
-            progress(min(95, max(5, int(upload_status.progress() * 95))), "YouTube · загружаю видео")
+        try:
+            upload_status, response = request.next_chunk()
+            if upload_status is not None:
+                progress(
+                    min(95, max(5, int(upload_status.progress() * 95))),
+                    "YouTube · загружаю видео",
+                )
+        except HttpError as exc:
+            status_code = int(getattr(exc.resp, "status", 0) or 0)
+            if status_code not in {500, 502, 503, 504} or retry >= 5:
+                raise RuntimeError(f"YouTube API: {exc}") from exc
+            retry += 1
+            time.sleep(min(30, 2**retry))
+
     video_id = str((response or {}).get("id") or "")
     if not video_id:
         raise RuntimeError(f"YouTube не подтвердил загрузку: {response}")
