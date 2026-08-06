@@ -38,9 +38,9 @@ def group_words(
     words: list[RecognizedWord],
     *,
     max_words: int = 5,
-    max_chars: int = 30,
-    max_duration: float = 2.8,
-    max_gap: float = 0.55,
+    max_chars: int = 29,
+    max_duration: float = 3.0,
+    max_gap: float = 0.58,
 ) -> list[CaptionGroup]:
     groups: list[CaptionGroup] = []
     current: list[RecognizedWord] = []
@@ -67,7 +67,7 @@ def group_words(
 
 
 def _balanced_break(words: tuple[RecognizedWord, ...]) -> int | None:
-    if len(words) < 4:
+    if len(words) < 3:
         return None
     best_index = None
     best_delta = None
@@ -87,7 +87,7 @@ def _caption_text(group: CaptionGroup, active_index: int) -> str:
     for index, item in enumerate(group.words):
         word = _ass_escape(item.text.upper())
         if index == active_index:
-            word = rf'{{\c&H0035FF4D&\fs86}}{word}{{\c&H00FFFFFF&\fs78}}'
+            word = rf'{{\c&H0000FF00&\fs88}}{word}{{\c&H00FFFFFF&\fs64}}'
         parts.append(word)
     if break_at is None:
         return ' '.join(parts)
@@ -104,7 +104,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Base,{font},78,&H00FFFFFF,&H004DFF35,&H00000000,&H50000000,-1,0,0,0,100,100,0,0,1,7,2,2,72,72,250,1
+Style: Base,{font},64,&H00FFFFFF,&H0000FF00,&H00000000,&H90000000,-1,0,0,0,100,100,-1,0,1,8,5,2,60,60,250,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -125,11 +125,12 @@ def write_word_ass(
             if index + 1 < len(group.words):
                 end = max(word.end, group.words[index + 1].start)
             else:
-                end = max(word.end + 0.18, start + 0.18)
+                end = max(word.end + 0.16, start + 0.20)
             text = _caption_text(group, index)
             tags = (
-                rf'{{\an2\pos(540,{y})\bord7\shad2\fad(20,35)'
-                rf'\fscx98\fscy98\t(0,75,\fscx103\fscy103)\t(75,145,\fscx100\fscy100)}}'
+                rf'{{\an2\pos(540,{y})\bord8\shad5\xshad4\yshad5\blur0.25'
+                rf'\fscx82\fscy82\t(0,65,\fscx116\fscy116)'
+                rf'\t(65,155,\fscx100\fscy100)\fad(0,25)}}'
             )
             lines.append(
                 f'Dialogue: 0,{ass_time(start)},{ass_time(end)},Base,,0,0,0,,{tags}{text}'
@@ -137,35 +138,41 @@ def write_word_ass(
     target.write_text(_header(font) + '\n'.join(lines) + '\n', encoding='utf-8-sig')
 
 
+def token_for(pulse: Pulse, index: int = 0) -> str:
+    duration = max(0.0, pulse.end - pulse.start)
+    if duration < 0.28:
+        return 'RARA'
+    if duration < 0.46:
+        return 'ARARA'
+    if duration < 0.66:
+        return 'RARARA'
+    return 'ARARARA'
+
+
 def arara_words_from_pulses(
     pulses: list[Pulse],
-    pattern: tuple[str, ...] = TOKENS,
+    pattern: tuple[str, ...] | None = None,
 ) -> list[RecognizedWord]:
-    """Turn voice activity into timed ARARA words without speech recognition.
+    """Convert voice activity into timed ARARA captions.
 
-    The user's performance is intentionally made from brand syllables that normal
-    Russian ASR often treats as unknown.  We therefore preserve the actual audio
-    timing and cycle through the canonical visible tokens.
+    When a pattern is supplied it is repeated exactly. Otherwise token length is
+    estimated from each spoken fragment duration, which better matches the user's
+    ARARA/RARA performance than ordinary speech recognition.
     """
-    if not pattern:
-        pattern = TOKENS
     words: list[RecognizedWord] = []
     for index, pulse in enumerate(pulses):
         start = max(0.0, float(pulse.start))
         end = max(start + 0.12, float(pulse.end))
+        text = pattern[index % len(pattern)] if pattern else token_for(pulse, index)
         words.append(
             RecognizedWord(
-                text=pattern[index % len(pattern)],
+                text=text,
                 start=start,
                 end=end,
                 confidence=1.0,
             )
         )
     return words
-
-
-def token_for(pulse: Pulse, index: int) -> str:
-    return TOKENS[index % len(TOKENS)]
 
 
 def write_capcut_ass(pulses: list[Pulse], target: Path, font: str = 'Arial Black', y: int = 1050) -> None:
