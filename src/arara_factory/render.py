@@ -14,7 +14,6 @@ from .audio import detect_pulses, extract_wav
 from .brainrot_index import choose_segment
 from .geometry import REFERENCE_HEIGHT, REFERENCE_WIDTH, canonical_layout
 from .subtitles import arara_words_from_pulses, write_word_ass
-from .transcribe import transcribe_wav
 
 VIDEO_EXTS = {'.mp4', '.mov', '.mkv', '.webm', '.avi'}
 MIN_REEL_SECONDS = 9.0
@@ -43,6 +42,9 @@ class RenderOptions:
     brainrot_zoom: float = 1.25
     subtitles_enabled: bool = True
     subtitle_mode: str = 'arara'
+    source_start: float = 0.0
+    clip_duration: float | None = None
+    output_stem: str | None = None
 
 
 def _run(cmd: list[str], log) -> subprocess.CompletedProcess[str]:
@@ -144,23 +146,47 @@ def _video_encoder_args(ffmpeg: str, options: RenderOptions, force_cpu: bool = F
     ], 'CPU x264'
 
 
-def _safe_output(output_dir: Path, source: Path, variant: int, preview: bool) -> Path:
+def _safe_output(
+    output_dir: Path,
+    source: Path,
+    variant: int,
+    preview: bool,
+    output_stem: str | None = None,
+) -> Path:
     label = 'preview' if preview else 'ready'
-    base = output_dir / f'{source.stem}_{label}_v{variant}.mp4'
+    stem = (output_stem or source.stem).strip() or source.stem
+    base = output_dir / f'{stem}_{label}_v{variant}.mp4'
     if not base.exists():
         return base
     stamp = time.strftime('%H%M%S')
-    return output_dir / f'{source.stem}_{label}_v{variant}_{stamp}.mp4'
+    return output_dir / f'{stem}_{label}_v{variant}_{stamp}.mp4'
 
 
-def _validate_reel(info: MediaInfo) -> None:
+def _validate_reel_format(info: MediaInfo) -> None:
     expected = REFERENCE_WIDTH / REFERENCE_HEIGHT
     actual = info.width / info.height
     if abs(actual - expected) > 0.015:
         raise RuntimeError(f'Reel должен быть вертикальным 9:16. Получено {info.width}×{info.height}.')
     if not info.has_audio:
         raise RuntimeError('В Reel нет аудиодорожки. Для субтитров и итогового звука нужен Reel со звуком.')
-    output_duration(info.duration)
+
+
+def _segment_timing(info: MediaInfo, options: RenderOptions) -> tuple[float, float]:
+    start = max(0.0, float(options.source_start or 0.0))
+    available = max(0.0, info.duration - start)
+    if options.clip_duration is None:
+        full_duration = output_duration(available)
+    else:
+        requested = min(MAX_REEL_SECONDS, float(options.clip_duration))
+        if requested < MIN_REEL_SECONDS - 0.05:
+            raise RuntimeError('Пакетный фрагмент должен быть длиной от 9 до 15 секунд.')
+        full_duration = min(requested, available)
+        if full_duration < MIN_REEL_SECONDS - 0.05:
+            raise RuntimeError('В конце исходной записи осталось меньше 9 секунд.')
+    duration = full_duration
+    if options.preview_seconds is not None:
+        duration = min(full_duration, max(1.0, float(options.preview_seconds)))
+    return start, duration
 
 
 def _even(value: float) -> int:
@@ -192,6 +218,7 @@ def _prepare_subtitles(
     ffmpeg: str,
     source: Path,
     work: Path,
+    source_start: float,
     reel_duration: float,
     options: RenderOptions,
     progress,
@@ -200,31 +227,14 @@ def _prepare_subtitles(
     wav = work / 'audio.wav'
     ass = work / 'captions.ass'
     progress(3, 'Извлекаю голос')
-    extract_wav(ffmpeg, source, wav, duration=reel_duration)
-
-    mode = str(options.subtitle_mode or 'arara').lower()
-    words = []
-
-    if mode == 'speech':
-        progress(6, 'Распознаю русскую речь офлайн')
-        try:
-            words = [word for word in transcribe_wav(wav) if word.start < reel_duration]
-        except Exception as exc:
-            log(f'Распознавание речи недоступно, включаю ARARA Timing: {exc}')
-        if not words:
-            log('Обычные слова не распознаны, включаю ARARA Timing.')
-
-    if not words:
-        progress(6, 'Определяю тайминги ARARA по голосу')
-        pulses = [pulse for pulse in detect_pulses(wav, min_silence=0.08) if pulse.start < reel_duration]
-        words = arara_words_from_pulses(pulses)
-        if words:
-            log(f'ARARA Timing: найдено голосовых фрагментов — {len(words)}')
-
+    extract_wav(ffmpeg, source, wav, duration=reel_duration, start=source_start)
+    progress(6, 'Определяю тайминги ARARA по голосу')
+    pulses = [pulse for pulse in detect_pulses(wav, min_silence=0.08) if pulse.start < reel_duration]
+    words = arara_words_from_pulses(pulses)
     if not words:
         log('Голосовые фрагменты не найдены. Reel будет собран без субтитров, а не остановлен ошибкой.')
         return None
-
+    log(f'ARARA Timing: найдено голосовых фрагментов — {len(words)}')
     write_word_ass(words, ass, options.font, options.subtitle_y)
     return ass
 
@@ -242,21 +252,22 @@ def render_reels(
     if not ffmpeg or not ffprobe:
         raise RuntimeError('FFmpeg не найден внутри программы.')
     if not source.is_file():
-        raise RuntimeError('Не выбран готовый Reel.')
+        raise RuntimeError('Не выбран готовый Reel или длинная запись.')
 
     clips = _brainrot_files(brainrot_source)
     if not clips:
         raise RuntimeError('Не выбран длинный brainrot-файл.')
 
     source_info = probe_media(ffprobe, source)
-    _validate_reel(source_info)
-    reel_duration = output_duration(source_info.duration, options.preview_seconds)
+    _validate_reel_format(source_info)
+    source_start, reel_duration = _segment_timing(source_info, options)
     _, brain_rect = canonical_layout(source_info.width, source_info.height)
 
-    if source_info.duration > MAX_REEL_SECONDS + 0.05 and not options.preview_seconds:
+    if options.clip_duration is None and source_info.duration > MAX_REEL_SECONDS + 0.05 and not options.preview_seconds:
         log(f'Reel {source_info.duration:.1f} сек автоматически обрезан до 15.0 сек.')
     log(
-        f'Reel {source_info.width}×{source_info.height} · итог {reel_duration:.2f} сек · '
+        f'Reel {source_info.width}×{source_info.height} · исходник {source_start:.2f}–'
+        f'{source_start + reel_duration:.2f} сек · итог {reel_duration:.2f} сек · '
         f'brainrot x={brain_rect.x} y={brain_rect.y} w={brain_rect.width} h={brain_rect.height}'
     )
 
@@ -274,6 +285,7 @@ def render_reels(
                 ffmpeg,
                 source,
                 work,
+                source_start,
                 reel_duration,
                 options,
                 progress,
@@ -297,7 +309,13 @@ def render_reels(
                 reel_duration,
                 seed=options.seed + variant + time.time_ns(),
             )
-            out = _safe_output(output_dir, source, variant, bool(options.preview_seconds))
+            out = _safe_output(
+                output_dir,
+                source,
+                variant,
+                bool(options.preview_seconds),
+                options.output_stem,
+            )
             crop_x, crop_y, crop_w, crop_h = _zoom_crop(
                 brain_info,
                 brain_rect.width / brain_rect.height,
@@ -321,13 +339,15 @@ def render_reels(
             else:
                 video_map = '[layout]'
 
-            base_cmd = [
-                ffmpeg, '-y', '-hide_banner', '-loglevel', 'error',
+            base_cmd = [ffmpeg, '-y', '-hide_banner', '-loglevel', 'error']
+            if source_start > 0:
+                base_cmd.extend(['-ss', f'{source_start:.3f}'])
+            base_cmd.extend([
                 '-t', f'{reel_duration:.3f}', '-i', str(source),
                 '-ss', f'{segment.start:.3f}', '-t', f'{reel_duration:.3f}', '-i', str(brainrot),
                 '-filter_complex', graph,
                 '-map', video_map, '-map', '0:a?',
-            ]
+            ])
             audio_args = [
                 '-c:a', 'aac', '-b:a', '160k',
                 '-t', f'{reel_duration:.3f}',
