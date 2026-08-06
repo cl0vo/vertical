@@ -34,7 +34,9 @@ def main() -> None:
         return
 
     from . import app as app_module
-    from .integrated_batch import install
+    from .integrated_batch import install as install_batch
+    from .publishing_ui import install as install_publishing
 
-    install(app_module)
+    install_batch(app_module)
+    install_publishing(app_module)
     app_module.main()
