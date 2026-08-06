@@ -1,10 +1,11 @@
 [project]
 name = "arara-factory"
-version = "0.2.0"
-description = "Local ARARA vertical brainrot reels assembly app"
+version = "0.3.0"
+description = "Local ARARA Hero-layout brainrot reels assembly app"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
+  "Pillow>=10.4",
   "pydantic>=2.7",
   "PySide6>=6.7",
   "typer>=0.12",
