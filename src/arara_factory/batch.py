@@ -6,13 +6,17 @@ import os
 import re
 import subprocess
 import tempfile
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+from .process_utils import popen_hidden
 
 MIN_SECONDS = 9.0
 MAX_SECONDS = 15.0
 TARGET_SECONDS = 12.0
 STATE_VERSION = 1
+ProgressCallback = Callable[[int, str], None]
 
 
 @dataclass(frozen=True)
@@ -134,23 +138,80 @@ def load_plan(source: Path) -> BatchPlan | None:
         return None
 
 
-def detect_silence_cut_points(ffmpeg: str, source: Path) -> list[float]:
+def _progress_seconds(line: str) -> float | None:
+    if line.startswith('out_time_ms='):
+        try:
+            return max(0.0, int(line.split('=', 1)[1]) / 1_000_000.0)
+        except ValueError:
+            return None
+    if line.startswith('out_time='):
+        try:
+            hours, minutes, seconds = line.split('=', 1)[1].split(':', 2)
+            return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+        except ValueError:
+            return None
+    return None
+
+
+def detect_silence_cut_points(
+    ffmpeg: str,
+    source: Path,
+    duration: float = 0.0,
+    progress: ProgressCallback | None = None,
+) -> list[float]:
+    if progress:
+        progress(0, 'Анализирую паузы · 0%')
+
+    log_handle, log_name = tempfile.mkstemp(prefix='arara-silence-', suffix='.log')
+    os.close(log_handle)
+    log_path = Path(log_name)
     command = [
         ffmpeg,
         '-hide_banner', '-nostats', '-loglevel', 'info',
         '-i', str(source),
         '-vn', '-af', 'silencedetect=noise=-36dB:d=0.18',
+        '-progress', 'pipe:1',
         '-f', 'null', '-',
     ]
-    process = subprocess.run(command, text=True, capture_output=True)
-    text = process.stderr or process.stdout
-    starts = [float(value) for value in re.findall(r'silence_start:\s*([0-9.]+)', text)]
-    ends = [float(value) for value in re.findall(r'silence_end:\s*([0-9.]+)', text)]
-    cuts: list[float] = []
-    for start, end in zip(starts, ends):
-        if end > start:
-            cuts.append((start + end) / 2.0)
-    return sorted(set(round(value, 3) for value in cuts if value >= 0))
+
+    try:
+        with log_path.open('w', encoding='utf-8', errors='replace') as error_log:
+            process = popen_hidden(
+                command,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=error_log,
+                encoding='utf-8',
+                errors='replace',
+                bufsize=1,
+            )
+            assert process.stdout is not None
+            last_percent = -1
+            for raw_line in process.stdout:
+                seconds = _progress_seconds(raw_line.strip())
+                if seconds is None or duration <= 0:
+                    continue
+                percent = min(99, max(0, int(seconds * 100 / duration)))
+                if progress and percent != last_percent:
+                    progress(percent, f'Анализирую паузы · {percent}%')
+                    last_percent = percent
+            return_code = process.wait()
+
+        text = log_path.read_text(encoding='utf-8', errors='replace')
+        if return_code:
+            raise RuntimeError(text[-4000:] or 'FFmpeg не смог проанализировать запись.')
+
+        starts = [float(value) for value in re.findall(r'silence_start:\s*([0-9.]+)', text)]
+        ends = [float(value) for value in re.findall(r'silence_end:\s*([0-9.]+)', text)]
+        cuts: list[float] = []
+        for start, end in zip(starts, ends):
+            if end > start:
+                cuts.append((start + end) / 2.0)
+        if progress:
+            progress(100, 'Анализ пауз завершён')
+        return sorted(set(round(value, 3) for value in cuts if value >= 0))
+    finally:
+        log_path.unlink(missing_ok=True)
 
 
 def build_segments(
@@ -197,11 +258,16 @@ def build_segments(
     return tuple(segments)
 
 
-def create_plan(ffmpeg: str, source: Path, duration: float) -> BatchPlan:
+def create_plan(
+    ffmpeg: str,
+    source: Path,
+    duration: float,
+    progress: ProgressCallback | None = None,
+) -> BatchPlan:
     if not source.is_file():
         raise FileNotFoundError(source)
     resolved, size, mtime_ns = _signature(source)
-    cuts = detect_silence_cut_points(ffmpeg, source)
+    cuts = detect_silence_cut_points(ffmpeg, source, duration, progress)
     segments = build_segments(duration, cuts)
     if not segments:
         raise RuntimeError('Не удалось найти ни одного отрезка длиной 9–15 секунд.')
@@ -216,8 +282,18 @@ def create_plan(ffmpeg: str, source: Path, duration: float) -> BatchPlan:
     return plan
 
 
-def ensure_plan(ffmpeg: str, source: Path, duration: float) -> BatchPlan:
-    return load_plan(source) or create_plan(ffmpeg, source, duration)
+def ensure_plan(
+    ffmpeg: str,
+    source: Path,
+    duration: float,
+    progress: ProgressCallback | None = None,
+) -> BatchPlan:
+    existing = load_plan(source)
+    if existing is not None:
+        if progress:
+            progress(100, 'План нарезки загружен')
+        return existing
+    return create_plan(ffmpeg, source, duration, progress)
 
 
 def pending_segments(plan: BatchPlan, limit: int) -> tuple[BatchSegment, ...]:
