@@ -328,9 +328,10 @@ def render_reels(
             )
 
             graph = ';'.join([
-                '[0:v]fps=30,setsar=1[base]',
+                '[0:v]fps=30,setsar=1,setpts=PTS-STARTPTS[base]',
                 f'[1:v]crop={crop_w}:{crop_h}:{crop_x}:{crop_y},'
-                f'scale={brain_rect.width}:{brain_rect.height}:flags=lanczos,setsar=1,fps=30[brain]',
+                f'scale={brain_rect.width}:{brain_rect.height}:flags=lanczos,'
+                f'setsar=1,fps=30,setpts=PTS-STARTPTS[brain]',
                 f'[base][brain]overlay=x={brain_rect.x}:y={brain_rect.y}:shortest=1[layout]',
             ])
             if subtitles_active:
@@ -349,6 +350,7 @@ def render_reels(
                 '-map', video_map, '-map', '0:a?',
             ])
             audio_args = [
+                '-af', 'asetpts=PTS-STARTPTS',
                 '-c:a', 'aac', '-b:a', '160k',
                 '-t', f'{reel_duration:.3f}',
                 '-movflags', '+faststart', '-shortest', str(out),
