@@ -93,8 +93,6 @@ def _has_nvenc(ffmpeg: str) -> bool:
 def _video_encoder_args(ffmpeg: str, options: RenderOptions, force_cpu: bool = False) -> tuple[list[str], str]:
     use_nvenc = not force_cpu and options.encoder_mode in {'auto', 'nvidia'} and _has_nvenc(ffmpeg)
     if use_nvenc:
-        # Compatible with current FFmpeg builds and older NVIDIA cards. If the driver
-        # rejects NVENC, render_reels automatically retries with libx264.
         return [
             '-c:v', 'h264_nvenc',
             '-preset', 'fast',
@@ -187,7 +185,7 @@ def render_reels(
             base_cmd = [
                 ffmpeg, '-y', '-hide_banner', '-loglevel', 'error',
                 '-t', f'{reel_duration:.3f}', '-i', str(source),
-                '-ss', f'{segment.start:.3f}', '-t', f'{segment.duration:.3f}', '-an', '-i', str(brainrot),
+                '-ss', f'{segment.start:.3f}', '-t', f'{segment.duration:.3f}', '-i', str(brainrot),
                 '-loop', '1', '-t', f'{reel_duration:.3f}', '-i', str(overlay),
                 '-filter_complex', graph,
                 '-map', '[vout]', '-map', '0:a?',
