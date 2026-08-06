@@ -1,7 +1,7 @@
 [project]
 name = "arara-factory"
-version = "0.11.1"
-description = "Personal Windows app for CapCut-style ARARA reels and resumable hour-long batches"
+version = "0.12.0"
+description = "Personal Windows app with an OBS-style brainrot scene editor and resumable batch cutting"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
