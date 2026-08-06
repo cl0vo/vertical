@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from .process_utils import run_hidden
 
 INDEX_VERSION = 2
 
@@ -39,7 +40,7 @@ def _probe_duration(ffprobe: str, path: Path) -> float:
         '-of', 'default=noprint_wrappers=1:nokey=1',
         str(path),
     ]
-    process = subprocess.run(cmd, text=True, capture_output=True)
+    process = run_hidden(cmd, text=True, capture_output=True)
     if process.returncode:
         raise RuntimeError((process.stderr or process.stdout)[-2000:])
     try:
