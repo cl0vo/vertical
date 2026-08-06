@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+from arara_factory.audio import Pulse
 from arara_factory.geometry import canonical_layout
 from arara_factory.render import output_duration
-from arara_factory.subtitles import group_words
+from arara_factory.subtitles import arara_words_from_pulses, group_words
 from arara_factory.transcribe import RecognizedWord
 
 
@@ -58,3 +59,20 @@ def test_long_pause_starts_a_new_caption_group() -> None:
     ]
     groups = group_words(words)
     assert len(groups) == 2
+
+
+def test_arara_timing_uses_voice_intervals_without_language_recognition() -> None:
+    pulses = [
+        Pulse(0.20, 0.62, 0.8),
+        Pulse(0.91, 1.22, 0.7),
+        Pulse(1.55, 2.04, 0.9),
+        Pulse(2.40, 3.08, 0.85),
+    ]
+    words = arara_words_from_pulses(pulses)
+    assert [word.text for word in words] == ['ARARA', 'RARA', 'RARARA', 'ARARARA']
+    assert [(word.start, word.end) for word in words] == [
+        (0.20, 0.62),
+        (0.91, 1.22),
+        (1.55, 2.04),
+        (2.40, 3.08),
+    ]
