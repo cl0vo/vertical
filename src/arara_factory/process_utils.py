@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import ctypes
 import os
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from typing import Any
 
 
@@ -30,3 +32,21 @@ def popen_hidden(command: Sequence[str], **kwargs: Any) -> subprocess.Popen[str]
     options = hidden_process_kwargs()
     options.update(kwargs)
     return subprocess.Popen(list(command), **options)
+
+
+@contextmanager
+def keep_system_awake() -> Iterator[None]:
+    """Prevent Windows sleep while a long render queue is active."""
+    if os.name != "nt":
+        yield
+        return
+
+    execution_state = ctypes.windll.kernel32.SetThreadExecutionState
+    continuous = 0x80000000
+    system_required = 0x00000001
+    display_required = 0x00000002
+    execution_state(continuous | system_required | display_required)
+    try:
+        yield
+    finally:
+        execution_state(continuous)
