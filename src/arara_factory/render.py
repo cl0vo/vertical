@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ from .geometry import (
     NormalizedRect,
     normalized_to_rect,
 )
+from .process_utils import popen_hidden, run_hidden
 from .scene_state import load_brainrot_transform
 from .subtitles import arara_words_from_pulses, write_word_ass
 
@@ -57,12 +59,79 @@ class RenderOptions:
     brainrot_height: float | None = None
 
 
-def _run(cmd: list[str], log) -> subprocess.CompletedProcess[str]:
+def _progress_seconds(line: str) -> float | None:
+    if line.startswith('out_time_ms='):
+        try:
+            return max(0.0, int(line.split('=', 1)[1]) / 1_000_000.0)
+        except ValueError:
+            return None
+    if line.startswith('out_time='):
+        try:
+            hours, minutes, seconds = line.split('=', 1)[1].split(':', 2)
+            return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+        except ValueError:
+            return None
+    return None
+
+
+def _run(
+    cmd: list[str],
+    log,
+    *,
+    duration: float | None = None,
+    progress=lambda value: None,
+) -> subprocess.CompletedProcess[str]:
     log(' '.join(cmd))
-    process = subprocess.run(cmd, text=True, capture_output=True)
-    if process.returncode:
-        raise RuntimeError((process.stderr or process.stdout)[-5000:])
-    return process
+    if duration is None or duration <= 0:
+        process = run_hidden(cmd, text=True, capture_output=True)
+        if process.returncode:
+            raise RuntimeError((process.stderr or process.stdout)[-5000:])
+        return process
+
+    progress_cmd = [*cmd[:-1], '-progress', 'pipe:1', '-nostats', cmd[-1]]
+    handle, error_name = tempfile.mkstemp(prefix='arara-render-', suffix='.log')
+    os.close(handle)
+    error_path = Path(error_name)
+    stdout_text: list[str] = []
+
+    try:
+        with error_path.open('w', encoding='utf-8', errors='replace') as error_log:
+            process = popen_hidden(
+                progress_cmd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=error_log,
+                encoding='utf-8',
+                errors='replace',
+                bufsize=1,
+            )
+            assert process.stdout is not None
+            last_percent = -1
+            for raw_line in process.stdout:
+                line = raw_line.strip()
+                stdout_text.append(line)
+                seconds = _progress_seconds(line)
+                if seconds is None:
+                    continue
+                percent = min(99, max(0, int(seconds * 100 / duration)))
+                if percent != last_percent:
+                    progress(percent)
+                    last_percent = percent
+            return_code = process.wait()
+
+        stderr_text = error_path.read_text(encoding='utf-8', errors='replace')
+        result = subprocess.CompletedProcess(
+            progress_cmd,
+            return_code,
+            '\n'.join(stdout_text),
+            stderr_text,
+        )
+        if return_code:
+            raise RuntimeError((stderr_text or result.stdout)[-5000:])
+        progress(100)
+        return result
+    finally:
+        error_path.unlink(missing_ok=True)
 
 
 def _escape_filter_path(path: Path) -> str:
@@ -84,7 +153,7 @@ def probe_media(ffprobe: str, path: Path) -> MediaInfo:
         '-of', 'json',
         str(path),
     ]
-    process = subprocess.run(cmd, text=True, capture_output=True)
+    process = run_hidden(cmd, text=True, capture_output=True)
     if process.returncode:
         raise RuntimeError((process.stderr or process.stdout)[-2000:])
     try:
@@ -125,7 +194,7 @@ def _brainrot_files(source: Path) -> list[Path]:
 
 def _has_nvenc(ffmpeg: str) -> bool:
     try:
-        process = subprocess.run(
+        process = run_hidden(
             [ffmpeg, '-hide_banner', '-encoders'],
             text=True,
             capture_output=True,
@@ -324,7 +393,7 @@ def render_reels(
                 subtitle_filter = f";[layout]subtitles='{_escape_filter_path(ass)}'[vout]"
 
         for variant in range(1, options.variants + 1):
-            progress(12 + int(82 * (variant - 1) / max(1, options.variants)), f'Собираю вариант {variant}')
+            progress(12 + int(82 * (variant - 1) / max(1, options.variants)), f'Подготавливаю вариант {variant}')
             brainrot = rng.choice(clips)
             brain_info = probe_media(ffprobe, brainrot)
             if brain_info.duration < reel_duration:
@@ -386,15 +455,31 @@ def render_reels(
             encoder_args, encoder_name = _video_encoder_args(ffmpeg, options)
             log(f'Кодирование: {encoder_name}')
 
+            def encoding_progress(value: int) -> None:
+                mapped = 12 + int(82 * value / 100)
+                progress(min(94, mapped), f'Кодирую Reel · {value}%')
+
             try:
-                _run([*base_cmd, *encoder_args, *audio_args], log)
+                _run(
+                    [*base_cmd, *encoder_args, *audio_args],
+                    log,
+                    duration=reel_duration,
+                    progress=encoding_progress,
+                )
             except RuntimeError as exc:
                 if encoder_name != 'NVIDIA NVENC':
                     raise
                 log(f'NVENC недоступен, повторяю на CPU: {exc}')
+                progress(12, 'NVIDIA недоступна · повторяю на CPU')
                 cpu_args, _ = _video_encoder_args(ffmpeg, options, force_cpu=True)
-                _run([*base_cmd, *cpu_args, *audio_args], log)
+                _run(
+                    [*base_cmd, *cpu_args, *audio_args],
+                    log,
+                    duration=reel_duration,
+                    progress=encoding_progress,
+                )
 
+            progress(98, 'Сохраняю готовый файл')
             made.append(out)
 
     progress(100, 'Готово')
