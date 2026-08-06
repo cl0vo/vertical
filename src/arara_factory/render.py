@@ -13,13 +13,12 @@ from pathlib import Path
 from .audio import detect_pulses, extract_wav
 from .brainrot_index import choose_segment
 from .geometry import (
-    DEFAULT_BRAINROT_TRANSFORM,
     REFERENCE_HEIGHT,
     REFERENCE_WIDTH,
     NormalizedRect,
-    canonical_layout,
     normalized_to_rect,
 )
+from .scene_state import load_brainrot_transform
 from .subtitles import arara_words_from_pulses, write_word_ass
 
 VIDEO_EXTS = {'.mp4', '.mov', '.mkv', '.webm', '.avi'}
@@ -52,10 +51,10 @@ class RenderOptions:
     source_start: float = 0.0
     clip_duration: float | None = None
     output_stem: str | None = None
-    brainrot_x: float = DEFAULT_BRAINROT_TRANSFORM.x
-    brainrot_y: float = DEFAULT_BRAINROT_TRANSFORM.y
-    brainrot_width: float = DEFAULT_BRAINROT_TRANSFORM.width
-    brainrot_height: float = DEFAULT_BRAINROT_TRANSFORM.height
+    brainrot_x: float | None = None
+    brainrot_y: float | None = None
+    brainrot_width: float | None = None
+    brainrot_height: float | None = None
 
 
 def _run(cmd: list[str], log) -> subprocess.CompletedProcess[str]:
@@ -201,12 +200,20 @@ def _segment_timing(info: MediaInfo, options: RenderOptions) -> tuple[float, flo
 
 
 def _brain_rect(info: MediaInfo, options: RenderOptions):
-    normalized = NormalizedRect(
-        float(options.brainrot_x),
-        float(options.brainrot_y),
-        float(options.brainrot_width),
-        float(options.brainrot_height),
-    )
+    if None in (
+        options.brainrot_x,
+        options.brainrot_y,
+        options.brainrot_width,
+        options.brainrot_height,
+    ):
+        normalized = load_brainrot_transform()
+    else:
+        normalized = NormalizedRect(
+            float(options.brainrot_x),
+            float(options.brainrot_y),
+            float(options.brainrot_width),
+            float(options.brainrot_height),
+        )
     return normalized_to_rect(normalized, info.width, info.height)
 
 
