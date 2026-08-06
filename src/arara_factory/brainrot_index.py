@@ -15,6 +15,7 @@ INDEX_VERSION = 2
 class IndexedSegment:
     start: float
     duration: float
+    index: int = -1
 
 
 @dataclass(frozen=True)
@@ -139,7 +140,14 @@ def reset_usage(video: Path) -> bool:
         return False
 
 
-def choose_segment(ffprobe: str, video: Path, reel_duration: float, seed: int | None = None) -> IndexedSegment:
+def choose_segment(
+    ffprobe: str,
+    video: Path,
+    reel_duration: float,
+    seed: int | None = None,
+    *,
+    mark_used: bool = True,
+) -> IndexedSegment:
     if reel_duration < 1.0 or reel_duration > 15.05:
         raise RuntimeError(f'Недопустимая длина brainrot-фрагмента: {reel_duration:.1f} сек.')
 
@@ -161,7 +169,24 @@ def choose_segment(ffprobe: str, video: Path, reel_duration: float, seed: int | 
     wanted = max(1.0, reel_duration)
     start = min(float(item['start']), max(0.0, source_duration - wanted))
 
-    used.add(selected)
+    if mark_used:
+        used.add(selected)
+        payload['used'] = sorted(used)
+        index_path(video).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+    return IndexedSegment(start=start, duration=wanted, index=selected)
+
+
+def mark_segment_used(video: Path, segment_index: int) -> None:
+    if segment_index < 0:
+        return
+    target = index_path(video)
+    if not target.exists():
+        return
+    payload = json.loads(target.read_text(encoding='utf-8'))
+    segments = payload.get('segments') or []
+    if segment_index >= len(segments):
+        return
+    used = set(payload.get('used') or [])
+    used.add(int(segment_index))
     payload['used'] = sorted(used)
-    index_path(video).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
-    return IndexedSegment(start=start, duration=wanted)
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
