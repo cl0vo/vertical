@@ -15,8 +15,16 @@ class Pulse:
     strength: float
 
 
-def extract_wav(ffmpeg: str, source: Path, target: Path, duration: float | None = None) -> None:
+def extract_wav(
+    ffmpeg: str,
+    source: Path,
+    target: Path,
+    duration: float | None = None,
+    start: float = 0.0,
+) -> None:
     cmd = [ffmpeg, '-y', '-hide_banner', '-loglevel', 'error']
+    if start > 0:
+        cmd.extend(['-ss', f'{max(0.0, start):.3f}'])
     if duration is not None:
         cmd.extend(['-t', f'{max(0.1, duration):.3f}'])
     cmd.extend([
