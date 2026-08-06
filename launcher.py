@@ -4,16 +4,20 @@ import sys
 
 
 def main() -> None:
-    if '--batch' in sys.argv:
-        from arara_factory.batch_app import main as batch_main
+    from arara_factory.batch_worker import BatchRenderWorker
 
-        batch_main()
+    if '--batch' in sys.argv:
+        from arara_factory import batch_app as batch_module
+
+        batch_module.BatchRenderWorker = BatchRenderWorker
+        batch_module.main()
         return
 
     from arara_factory import app as app_module
-    from arara_factory.integrated_batch import install
+    from arara_factory import integrated_batch as integrated_module
 
-    install(app_module)
+    integrated_module.BatchRenderWorker = BatchRenderWorker
+    integrated_module.install(app_module)
     app_module.main()
 
 
