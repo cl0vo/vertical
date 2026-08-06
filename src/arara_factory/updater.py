@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,8 +86,18 @@ def check_for_update(current_version: str, timeout: int = 15) -> UpdateInfo | No
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            # The repository exists, but no permanent Release has been published yet.
+            return None
+        raise RuntimeError(f"GitHub вернул ошибку HTTP {exc.code} при проверке обновления.") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError("Не удалось подключиться к GitHub для проверки обновления.") from exc
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise RuntimeError("GitHub вернул некорректные данные обновления.") from exc
     return release_from_payload(payload, current_version)
 
 
