@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QUrl, Signal
+from PySide6.QtCore import QPointF, QRectF, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QMouseEvent, QPainter, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoFrame, QVideoSink
 from PySide6.QtWidgets import (
@@ -22,6 +24,11 @@ from .geometry import (
     canonical_layout,
     clamp_normalized_rect,
 )
+from .scene_state import (
+    load_brainrot_transform,
+    save_brainrot_transform,
+    saved_brainrot_path,
+)
 
 
 class PreviewCanvas(QWidget):
@@ -35,7 +42,7 @@ class PreviewCanvas(QWidget):
         self._edit_enabled = True
         self._source_mode = False
         self._brain_zoom = 1.25
-        self._transform = DEFAULT_BRAINROT_TRANSFORM
+        self._transform = load_brainrot_transform()
         self._placeholder = "Сделай тест 5 секунд — результат появится здесь"
         self._drag_mode: str | None = None
         self._press_pos = QPointF()
@@ -370,7 +377,7 @@ class PreviewPanel(QFrame):
         layout.addLayout(header)
 
         self.canvas = PreviewCanvas()
-        self.canvas.transform_changed.connect(self.transform_changed.emit)
+        self.canvas.transform_changed.connect(self._on_transform_changed)
         layout.addWidget(self.canvas, 1)
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
@@ -404,11 +411,15 @@ class PreviewPanel(QFrame):
         self.edit_box = QCheckBox("Редактировать brainrot")
         self.edit_box.setChecked(True)
         self.edit_box.toggled.connect(self.canvas.set_edit_enabled)
+        self.batch_button = QPushButton("Резать пачку")
+        self.batch_button.setObjectName("mediaButton")
+        self.batch_button.clicked.connect(self._open_batch_mode)
         self.reset_button = QPushButton("Во всю нижнюю треть")
         self.reset_button.setObjectName("mediaButton")
         self.reset_button.clicked.connect(self.canvas.reset_brain_transform)
         editor_controls.addWidget(self.edit_box)
         editor_controls.addStretch(1)
+        editor_controls.addWidget(self.batch_button)
         editor_controls.addWidget(self.reset_button)
         layout.addLayout(editor_controls)
 
@@ -420,14 +431,33 @@ class PreviewPanel(QFrame):
         self.player.mediaStatusChanged.connect(self._media_status_changed)
         self.brain_player.mediaStatusChanged.connect(self._brain_media_status_changed)
 
+        self._brainrot_watch = QTimer(self)
+        self._brainrot_watch.setInterval(800)
+        self._brainrot_watch.timeout.connect(self._refresh_saved_brainrot)
+        self._brainrot_watch.start()
+        QTimer.singleShot(0, self._refresh_saved_brainrot)
+
+    def _on_transform_changed(self, x: float, y: float, width: float, height: float) -> None:
+        safe = save_brainrot_transform(NormalizedRect(x, y, width, height))
+        self.transform_changed.emit(safe.x, safe.y, safe.width, safe.height)
+
     def set_brain_transform(self, rect: NormalizedRect) -> None:
         self.canvas.set_brain_transform(rect)
+        save_brainrot_transform(rect)
 
     def brain_transform(self) -> NormalizedRect:
         return self.canvas.brain_transform()
 
     def set_brain_zoom(self, zoom: float) -> None:
         self.canvas.set_brain_zoom(zoom)
+
+    def _refresh_saved_brainrot(self) -> None:
+        path = saved_brainrot_path()
+        if path is None:
+            return
+        resolved = path.resolve()
+        if self._brain_path != resolved:
+            self.load_brainrot(resolved)
 
     def load_brainrot(self, path: Path) -> None:
         if not path.is_file():
@@ -436,7 +466,10 @@ class PreviewPanel(QFrame):
             self.canvas.clear_brainrot()
             self._brain_path = None
             return
-        self._brain_path = path.resolve()
+        resolved = path.resolve()
+        if self._brain_path == resolved and not self.canvas._brain_image.isNull():
+            return
+        self._brain_path = resolved
         self.brain_player.stop()
         self.brain_player.setSource(QUrl.fromLocalFile(str(self._brain_path)))
         self.brain_player.setPosition(0)
@@ -448,20 +481,27 @@ class PreviewPanel(QFrame):
         *,
         autoplay: bool,
         title: str,
-        editable_source: bool = False,
+        editable_source: bool | None = None,
     ) -> None:
         if not path.is_file():
             return
-        self._editable_source = editable_source
-        self.canvas.set_source_mode(editable_source)
-        self.edit_box.setEnabled(editable_source)
-        self.reset_button.setEnabled(editable_source)
+        if editable_source is None:
+            lowered = title.lower()
+            editable_source = not any(
+                marker in lowered
+                for marker in ("готов", "тест", "preview", "result", "последний")
+            )
+        self._refresh_saved_brainrot()
+        self._editable_source = bool(editable_source)
+        self.canvas.set_source_mode(self._editable_source)
+        self.edit_box.setEnabled(self._editable_source)
+        self.reset_button.setEnabled(self._editable_source)
         self.player.stop()
         self.canvas.clear("Загружаю видео…")
         self.source_label.setText(title)
         self.player.setSource(QUrl.fromLocalFile(str(path.resolve())))
         self.file_loaded.emit(str(path))
-        if editable_source and self._brain_path:
+        if self._editable_source and self._brain_path:
             self.brain_player.play()
         if autoplay:
             self.player.play()
@@ -522,6 +562,16 @@ class PreviewPanel(QFrame):
             self.brain_player.setPosition(0)
             if self._editable_source:
                 self.brain_player.play()
+
+    def _open_batch_mode(self) -> None:
+        try:
+            if getattr(sys, "frozen", False):
+                command = [sys.executable, "--batch"]
+            else:
+                command = [sys.executable, "-m", "arara_factory.batch_app"]
+            subprocess.Popen(command, close_fds=True)
+        except OSError:
+            self.source_label.setText("не удалось открыть пакетный режим")
 
     @staticmethod
     def _format_time(milliseconds: int) -> str:
