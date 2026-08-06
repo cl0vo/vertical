@@ -1,4 +1,4 @@
-name: Build Windows app
+name: Build Windows installer
 
 on:
   workflow_dispatch:
@@ -6,38 +6,95 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'assets/**'
+      - 'installer/**'
       - 'launcher.py'
       - 'pyproject.toml'
       - '.github/workflows/build-windows.yml'
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: windows-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install
+          cache: 'pip'
+
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install . pyinstaller
-      - name: Validate Python app
+
+      - name: Validate application
         run: |
-          python -m compileall -q src
-          python -c "from arara_factory.app import MainWindow; from arara_factory.render import RenderOptions; from arara_factory.brainrot_index import get_index_info"
+          python -m compileall -q src launcher.py
+          python -c "import arara_factory.app; import arara_factory.render; import arara_factory.brainrot_index; print('ARARA imports OK')"
+
       - name: Download FFmpeg
         shell: powershell
         run: |
           Invoke-WebRequest https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile ffmpeg.zip
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg
           $bin = Get-ChildItem ffmpeg -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-          Copy-Item $bin.FullName ffmpeg.exe
           $probe = Get-ChildItem ffmpeg -Recurse -Filter ffprobe.exe | Select-Object -First 1
+          if (-not $bin -or -not $probe) { throw 'FFmpeg download is incomplete' }
+          Copy-Item $bin.FullName ffmpeg.exe
           Copy-Item $probe.FullName ffprobe.exe
-      - name: Build EXE
-        run: pyinstaller --noconfirm --clean --windowed --onefile --name "ARARA-Factory" --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." launcher.py
-      - uses: actions/upload-artifact@v4
+
+      - name: Build portable application
+        shell: powershell
+        run: |
+          $pyiArgs = @(
+            '--noconfirm',
+            '--clean',
+            '--windowed',
+            '--onefile',
+            '--name', 'ARARA-Factory',
+            '--paths', 'src',
+            '--add-binary', 'ffmpeg.exe;.',
+            '--add-binary', 'ffprobe.exe;.'
+          )
+          if (Test-Path 'assets\arara_template.png') {
+            $pyiArgs += @('--add-data', 'assets\arara_template.png;assets')
+          }
+          $pyiArgs += 'launcher.py'
+          python -m PyInstaller @pyiArgs
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $compiler)) {
+            choco install innosetup --yes --no-progress
+          }
+          if (-not (Test-Path $compiler)) { throw 'Inno Setup compiler not found' }
+
+      - name: Build installer
+        shell: powershell
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $compiler 'installer\arara_factory.iss'
+          if (-not (Test-Path 'installer-output\ARARA-Factory-Setup.exe')) {
+            throw 'Installer was not created'
+          }
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
         with:
-          name: ARARA-Factory-Windows
+          name: ARARA-Factory-Installer
+          path: installer-output/ARARA-Factory-Setup.exe
+          if-no-files-found: error
+
+      - name: Upload portable version
+        uses: actions/upload-artifact@v4
+        with:
+          name: ARARA-Factory-Portable
           path: dist/ARARA-Factory.exe
+          if-no-files-found: error
