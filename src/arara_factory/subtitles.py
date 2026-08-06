@@ -139,9 +139,9 @@ def write_word_ass(
 
 def token_for(pulse: Pulse, index: int = 0) -> str:
     duration = max(0.0, pulse.end - pulse.start)
-    if duration < 0.28:
+    if duration < 0.36:
         return 'RARA'
-    if duration < 0.46:
+    if duration < 0.48:
         return 'ARARA'
     if duration < 0.66:
         return 'RARARA'
