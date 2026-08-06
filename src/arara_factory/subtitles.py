@@ -37,9 +37,9 @@ def _ass_escape(text: str) -> str:
 def group_words(
     words: list[RecognizedWord],
     *,
-    max_words: int = 5,
-    max_chars: int = 29,
-    max_duration: float = 3.0,
+    max_words: int = 3,
+    max_chars: int = 22,
+    max_duration: float = 2.8,
     max_gap: float = 0.58,
 ) -> list[CaptionGroup]:
     groups: list[CaptionGroup] = []
@@ -87,7 +87,7 @@ def _caption_text(group: CaptionGroup, active_index: int) -> str:
     for index, item in enumerate(group.words):
         word = _ass_escape(item.text.upper())
         if index == active_index:
-            word = rf'{{\c&H0000FF00&\fs88}}{word}{{\c&H00FFFFFF&\fs64}}'
+            word = rf'{{\c&H0000FF00&\fs82}}{word}{{\c&H00FFFFFF&\fs78}}'
         parts.append(word)
     if break_at is None:
         return ' '.join(parts)
@@ -104,7 +104,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Base,{font},64,&H00FFFFFF,&H0000FF00,&H00000000,&H90000000,-1,0,0,0,100,100,-1,0,1,8,5,2,60,60,250,1
+Style: Base,{font},78,&H00FFFFFF,&H0000FF00,&H00000000,&H00000000,-1,0,0,0,100,100,-1,0,1,7,0,2,54,54,250,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -128,9 +128,8 @@ def write_word_ass(
                 end = max(word.end + 0.16, start + 0.20)
             text = _caption_text(group, index)
             tags = (
-                rf'{{\an2\pos(540,{y})\bord8\shad5\xshad4\yshad5\blur0.25'
-                rf'\fscx82\fscy82\t(0,65,\fscx116\fscy116)'
-                rf'\t(65,155,\fscx100\fscy100)\fad(0,25)}}'
+                rf'{{\an2\pos(540,{y})\bord7\shad0\xshad6\yshad7\blur0.20'
+                rf'\fscx105\fscy105\t(0,75,\fscx100\fscy100)}}'
             )
             lines.append(
                 f'Dialogue: 0,{ass_time(start)},{ass_time(end)},Base,,0,0,0,,{tags}{text}'
