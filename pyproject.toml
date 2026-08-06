@@ -1,6 +1,6 @@
 [project]
 name = "arara-factory"
-version = "0.15.0"
+version = "0.15.1"
 description = "One-window ARARA creation and official TikTok Instagram YouTube publishing queue"
 requires-python = ">=3.11"
 dependencies = [
