@@ -59,14 +59,14 @@ jobs:
             throw 'Russian Vosk model was not downloaded correctly'
           }
 
-      - name: Build portable application
+      - name: Build installed application directory
         shell: powershell
         run: |
           $pyiArgs = @(
             '--noconfirm',
             '--clean',
             '--windowed',
-            '--onefile',
+            '--onedir',
             '--name', 'ARARA-Factory',
             '--paths', 'src',
             '--collect-all', 'vosk',
@@ -76,6 +76,9 @@ jobs:
             'launcher.py'
           )
           python -m PyInstaller @pyiArgs
+          if (-not (Test-Path 'dist\ARARA-Factory\ARARA-Factory.exe')) {
+            throw 'ARARA Factory application directory was not created'
+          }
 
       - name: Install Inno Setup
         shell: powershell
@@ -102,9 +105,9 @@ jobs:
           path: installer-output/ARARA-Factory-Setup.exe
           if-no-files-found: error
 
-      - name: Upload portable version
+      - name: Upload portable application folder
         uses: actions/upload-artifact@v6
         with:
           name: ARARA-Factory-Portable
-          path: dist/ARARA-Factory.exe
+          path: dist/ARARA-Factory/**
           if-no-files-found: error
