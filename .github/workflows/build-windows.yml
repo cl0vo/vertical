@@ -42,7 +42,7 @@ jobs:
       - name: Validate application
         run: |
           python -m compileall -q src launcher.py
-          python -c "import PySide6.QtMultimedia; import PySide6.QtMultimediaWidgets; import arara_factory.app; import arara_factory.preview; import arara_factory.updater; print('ARARA imports OK')"
+          python -c "import PySide6.QtMultimedia; import PySide6.QtMultimediaWidgets; import arara_factory.app; import arara_factory.batch; import arara_factory.batch_app; import arara_factory.preview; import arara_factory.updater; print('ARARA imports OK')"
           pytest -q
 
       - name: Download FFmpeg
@@ -56,13 +56,16 @@ jobs:
           Copy-Item $bin.FullName ffmpeg.exe
           Copy-Item $probe.FullName ffprobe.exe
 
-      - name: Smoke-test real FFmpeg render
+      - name: Smoke-test real FFmpeg render and frame zero
         shell: powershell
         run: |
           .\ffmpeg.exe -y -hide_banner -loglevel error -f lavfi -i "color=c=blue:s=270x480:r=30" -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 9 -shortest -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac smoke-reel.mp4
-          .\ffmpeg.exe -y -hide_banner -loglevel error -f lavfi -i "testsrc2=s=320x180:r=30" -t 20 -c:v libx264 -preset ultrafast -pix_fmt yuv420p smoke-brainrot.mp4
+          .\ffmpeg.exe -y -hide_banner -loglevel error -f lavfi -i "color=c=red:s=320x180:r=30" -t 20 -c:v libx264 -preset ultrafast -pix_fmt yuv420p smoke-brainrot.mp4
           @'
+          import subprocess
           from pathlib import Path
+          from PIL import Image
+          from arara_factory.geometry import canonical_layout
           from arara_factory.render import RenderOptions, _binary, probe_media, render_reels
 
           output = Path('smoke-output')
@@ -81,10 +84,23 @@ jobs:
           )
           assert len(made) == 1 and made[0].is_file(), made
           ffprobe = _binary('ffprobe')
-          assert ffprobe
-          duration = probe_media(ffprobe, made[0]).duration
-          assert 8.85 <= duration <= 9.15, duration
-          print(f'ARARA smoke render OK: {made[0]} ({duration:.3f}s)')
+          ffmpeg = _binary('ffmpeg')
+          assert ffprobe and ffmpeg
+          info = probe_media(ffprobe, made[0])
+          assert 8.85 <= info.duration <= 9.15, info.duration
+
+          first = Path('first-frame.png')
+          subprocess.run(
+              [ffmpeg, '-y', '-hide_banner', '-loglevel', 'error', '-i', str(made[0]), '-frames:v', '1', str(first)],
+              check=True,
+          )
+          image = Image.open(first).convert('RGB')
+          _, brain = canonical_layout(info.width, info.height)
+          pixel = image.getpixel((brain.x + brain.width // 2, brain.y + brain.height // 2))
+          assert pixel[0] > 120 and pixel[0] > pixel[2] + 60, (
+              'Brainrot is missing on output frame zero', pixel
+          )
+          print(f'ARARA smoke render OK: {made[0]} ({info.duration:.3f}s), frame-zero pixel={pixel}')
           '@ | python -
 
       - name: Build installed application directory
@@ -97,6 +113,7 @@ jobs:
             '--onedir',
             '--name', 'ARARA-Factory',
             '--paths', 'src',
+            '--hidden-import', 'arara_factory.batch_app',
             '--hidden-import', 'PySide6.QtMultimedia',
             '--hidden-import', 'PySide6.QtMultimediaWidgets',
             '--add-binary', 'ffmpeg.exe;.',
@@ -160,7 +177,7 @@ jobs:
           if ($exists) {
             gh release upload $tag $asset --repo $repo --clobber
           } else {
-            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "ARARA Timing subtitles, embedded preview and safe one-click updater."
+            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "CapCut-style ARARA subtitles, frame-zero brainrot and resumable hour-recording batches."
           }
           if ($LASTEXITCODE -ne 0) { throw 'GitHub Release was not published' }
 
