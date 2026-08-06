@@ -1,7 +1,7 @@
 [project]
 name = "arara-factory"
-version = "0.14.0"
-description = "One-window ARARA workflow with safe resumable batches and simple three-step creation"
+version = "0.15.0"
+description = "One-window ARARA creation and official TikTok Instagram YouTube publishing queue"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
@@ -10,6 +10,10 @@ dependencies = [
   "PySide6>=6.7",
   "typer>=0.12",
   "pyyaml>=6.0",
+  "google-api-python-client>=2.170",
+  "google-auth>=2.40",
+  "google-auth-httplib2>=0.2",
+  "google-auth-oauthlib>=1.2",
 ]
 
 [project.scripts]
