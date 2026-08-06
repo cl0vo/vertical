@@ -10,10 +10,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .audio import extract_wav
+from .audio import detect_pulses, extract_wav
 from .brainrot_index import choose_segment
 from .geometry import REFERENCE_HEIGHT, REFERENCE_WIDTH, canonical_layout
-from .subtitles import write_word_ass
+from .subtitles import arara_words_from_pulses, write_word_ass
 from .transcribe import transcribe_wav
 
 VIDEO_EXTS = {'.mp4', '.mov', '.mkv', '.webm', '.avi'}
@@ -42,6 +42,7 @@ class RenderOptions:
     preview_seconds: float | None = None
     brainrot_zoom: float = 1.25
     subtitles_enabled: bool = True
+    subtitle_mode: str = 'arara'
 
 
 def _run(cmd: list[str], log) -> subprocess.CompletedProcess[str]:
@@ -187,6 +188,47 @@ def _zoom_crop(info: MediaInfo, target_aspect: float, zoom: float) -> tuple[int,
     return x, y, crop_w, crop_h
 
 
+def _prepare_subtitles(
+    ffmpeg: str,
+    source: Path,
+    work: Path,
+    reel_duration: float,
+    options: RenderOptions,
+    progress,
+    log,
+) -> Path | None:
+    wav = work / 'audio.wav'
+    ass = work / 'captions.ass'
+    progress(3, 'Извлекаю голос')
+    extract_wav(ffmpeg, source, wav, duration=reel_duration)
+
+    mode = str(options.subtitle_mode or 'arara').lower()
+    words = []
+
+    if mode == 'speech':
+        progress(6, 'Распознаю русскую речь офлайн')
+        try:
+            words = [word for word in transcribe_wav(wav) if word.start < reel_duration]
+        except Exception as exc:
+            log(f'Распознавание речи недоступно, включаю ARARA Timing: {exc}')
+        if not words:
+            log('Обычные слова не распознаны, включаю ARARA Timing.')
+
+    if not words:
+        progress(6, 'Определяю тайминги ARARA по голосу')
+        pulses = [pulse for pulse in detect_pulses(wav, min_silence=0.08) if pulse.start < reel_duration]
+        words = arara_words_from_pulses(pulses)
+        if words:
+            log(f'ARARA Timing: найдено голосовых фрагментов — {len(words)}')
+
+    if not words:
+        log('Голосовые фрагменты не найдены. Reel будет собран без субтитров, а не остановлен ошибкой.')
+        return None
+
+    write_word_ass(words, ass, options.font, options.subtitle_y)
+    return ass
+
+
 def render_reels(
     source: Path,
     brainrot_source: Path,
@@ -224,20 +266,22 @@ def render_reels(
 
     with tempfile.TemporaryDirectory(prefix='arara_') as tmp:
         work = Path(tmp)
-        ass = work / 'captions.ass'
         subtitle_filter = ''
+        subtitles_active = False
 
         if options.subtitles_enabled:
-            wav = work / 'audio.wav'
-            progress(3, 'Извлекаю речь')
-            extract_wav(ffmpeg, source, wav, duration=reel_duration)
-            progress(6, 'Распознаю русские субтитры офлайн')
-            words = [word for word in transcribe_wav(wav) if word.start < reel_duration]
-            if not words:
-                raise RuntimeError('Русская речь не распознана. Проверь громкость голоса в Reel.')
-            write_word_ass(words, ass, options.font, options.subtitle_y)
-            log(f'Распознано слов: {len(words)}')
-            subtitle_filter = f";[layout]subtitles='{_escape_filter_path(ass)}'[vout]"
+            ass = _prepare_subtitles(
+                ffmpeg,
+                source,
+                work,
+                reel_duration,
+                options,
+                progress,
+                log,
+            )
+            if ass is not None:
+                subtitles_active = True
+                subtitle_filter = f";[layout]subtitles='{_escape_filter_path(ass)}'[vout]"
 
         for variant in range(1, options.variants + 1):
             progress(12 + int(82 * (variant - 1) / max(1, options.variants)), f'Собираю вариант {variant}')
@@ -271,7 +315,7 @@ def render_reels(
                 f'scale={brain_rect.width}:{brain_rect.height}:flags=lanczos,setsar=1,fps=30[brain]',
                 f'[base][brain]overlay=x={brain_rect.x}:y={brain_rect.y}:shortest=1[layout]',
             ])
-            if options.subtitles_enabled:
+            if subtitles_active:
                 graph += subtitle_filter
                 video_map = '[vout]'
             else:
