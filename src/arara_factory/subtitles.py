@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+
 from .audio import Pulse
+from .transcribe import RecognizedWord
 
 TOKENS = ('ARARA', 'RARA', 'RARARA', 'ARARARA')
+
+
+@dataclass(frozen=True)
+class CaptionGroup:
+    words: tuple[RecognizedWord, ...]
+
+    @property
+    def start(self) -> float:
+        return self.words[0].start
+
+    @property
+    def end(self) -> float:
+        return self.words[-1].end
 
 
 def ass_time(seconds: float) -> str:
@@ -14,24 +30,72 @@ def ass_time(seconds: float) -> str:
     return f'{h}:{m:02d}:{s:02d}.{cs:02d}'
 
 
-def token_for(pulse: Pulse, index: int) -> str:
-    duration = pulse.end - pulse.start
-    if duration > .62:
-        return 'ARARARA'
-    if duration > .43:
-        return 'RARARA'
-    if duration < .24:
-        return 'RARA'
-    return TOKENS[index % len(TOKENS)]
+def _ass_escape(text: str) -> str:
+    return text.replace('\\', r'\\').replace('{', r'\{').replace('}', r'\}')
 
 
-def write_capcut_ass(pulses: list[Pulse], target: Path, font: str = 'Arial Black', y: int = 1120) -> None:
-    """Create the subtitle look measured from the supplied reference Reel.
+def group_words(
+    words: list[RecognizedWord],
+    *,
+    max_words: int = 5,
+    max_chars: int = 30,
+    max_duration: float = 2.8,
+    max_gap: float = 0.55,
+) -> list[CaptionGroup]:
+    groups: list[CaptionGroup] = []
+    current: list[RecognizedWord] = []
 
-    White heavy uppercase text, thick black outline, current token in neon green,
-    two-line grouping and a short pop-in without camera zooms.
-    """
-    header = f'''[Script Info]
+    def flush() -> None:
+        nonlocal current
+        if current:
+            groups.append(CaptionGroup(tuple(current)))
+            current = []
+
+    for word in words:
+        if not current:
+            current.append(word)
+            continue
+        candidate = [*current, word]
+        text_length = sum(len(item.text) for item in candidate) + len(candidate) - 1
+        duration = candidate[-1].end - candidate[0].start
+        gap = word.start - current[-1].end
+        if len(candidate) > max_words or text_length > max_chars or duration > max_duration or gap > max_gap:
+            flush()
+        current.append(word)
+    flush()
+    return groups
+
+
+def _balanced_break(words: tuple[RecognizedWord, ...]) -> int | None:
+    if len(words) < 4:
+        return None
+    best_index = None
+    best_delta = None
+    for index in range(1, len(words)):
+        left = len(' '.join(word.text for word in words[:index]))
+        right = len(' '.join(word.text for word in words[index:]))
+        delta = abs(left - right)
+        if best_delta is None or delta < best_delta:
+            best_index = index
+            best_delta = delta
+    return best_index
+
+
+def _caption_text(group: CaptionGroup, active_index: int) -> str:
+    break_at = _balanced_break(group.words)
+    parts: list[str] = []
+    for index, item in enumerate(group.words):
+        word = _ass_escape(item.text.upper())
+        if index == active_index:
+            word = rf'{{\c&H0035FF4D&\fs86}}{word}{{\c&H00FFFFFF&\fs78}}'
+        parts.append(word)
+    if break_at is None:
+        return ' '.join(parts)
+    return ' '.join(parts[:break_at]) + r'\N' + ' '.join(parts[break_at:])
+
+
+def _header(font: str) -> str:
+    return f'''[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
 PlayResY: 1920
@@ -45,21 +109,52 @@ Style: Base,{font},78,&H00FFFFFF,&H004DFF35,&H00000000,&H50000000,-1,0,0,0,100,1
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 '''
+
+
+def write_word_ass(
+    words: list[RecognizedWord],
+    target: Path,
+    font: str = 'Arial Black',
+    y: int = 1050,
+) -> None:
+    groups = group_words(words)
     lines: list[str] = []
-    for i, pulse in enumerate(pulses):
-        current = token_for(pulse, i)
-        previous = token_for(pulses[i - 1], i - 1) if i else ''
-        following = token_for(pulses[i + 1], i + 1) if i + 1 < len(pulses) else ''
+    for group in groups:
+        for index, word in enumerate(group.words):
+            start = word.start
+            if index + 1 < len(group.words):
+                end = max(word.end, group.words[index + 1].start)
+            else:
+                end = max(word.end + 0.18, start + 0.18)
+            text = _caption_text(group, index)
+            tags = (
+                rf'{{\an2\pos(540,{y})\bord7\shad2\fad(20,35)'
+                rf'\fscx98\fscy98\t(0,75,\fscx103\fscy103)\t(75,145,\fscx100\fscy100)}}'
+            )
+            lines.append(
+                f'Dialogue: 0,{ass_time(start)},{ass_time(end)},Base,,0,0,0,,{tags}{text}'
+            )
+    target.write_text(_header(font) + '\n'.join(lines) + '\n', encoding='utf-8-sig')
 
-        upper = ' '.join(item for item in (previous, current) if item)
-        lower = following
-        active = rf'{{\c&H0035FF4D&\fs86}}{current}{{\c&H00FFFFFF&\fs78}}'
-        upper = upper.replace(current, active, 1)
-        text = upper + (rf'\N{lower}' if lower else '')
 
-        # Pop only the subtitle layer. No source-video zoom or movement.
-        tags = rf'{{\an2\pos(540,{y})\bord7\shad2\fad(25,45)\fscx94\fscy94\t(0,95,\fscx104\fscy104)\t(95,170,\fscx100\fscy100)}}'
+def token_for(pulse: Pulse, index: int) -> str:
+    duration = pulse.end - pulse.start
+    if duration > .62:
+        return 'ARARARA'
+    if duration > .43:
+        return 'RARARA'
+    if duration < .24:
+        return 'RARA'
+    return TOKENS[index % len(TOKENS)]
+
+
+def write_capcut_ass(pulses: list[Pulse], target: Path, font: str = 'Arial Black', y: int = 1050) -> None:
+    lines: list[str] = []
+    for index, pulse in enumerate(pulses):
+        current = token_for(pulse, index)
+        tags = rf'{{\an2\pos(540,{y})\bord7\shad2\fad(25,45)}}'
         end = max(pulse.end, pulse.start + .18)
-        lines.append(f'Dialogue: 0,{ass_time(pulse.start)},{ass_time(end)},Base,,0,0,0,,{tags}{text}')
-
-    target.write_text(header + '\n'.join(lines) + '\n', encoding='utf-8-sig')
+        lines.append(
+            f'Dialogue: 0,{ass_time(pulse.start)},{ass_time(end)},Base,,0,0,0,,{tags}{current}'
+        )
+    target.write_text(_header(font) + '\n'.join(lines) + '\n', encoding='utf-8-sig')
