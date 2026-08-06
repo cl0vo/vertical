@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import urllib.error
 
+import pytest
+
 from arara_factory.updater import (
     check_for_update,
     is_newer_version,
@@ -41,7 +43,7 @@ def test_current_or_missing_release_is_ignored() -> None:
     assert release_from_payload({"tag_name": "v0.11.0", "assets": []}, "0.10.0") is None
 
 
-def test_http_404_means_no_release_yet(monkeypatch) -> None:
+def test_http_404_reports_that_release_is_not_published(monkeypatch) -> None:
     def missing_release(*args, **kwargs):
         raise urllib.error.HTTPError(
             url="https://api.github.com/repos/cl0vo/vertical/releases/latest",
@@ -52,4 +54,5 @@ def test_http_404_means_no_release_yet(monkeypatch) -> None:
         )
 
     monkeypatch.setattr("arara_factory.updater.urllib.request.urlopen", missing_release)
-    assert check_for_update("0.10.1") is None
+    with pytest.raises(RuntimeError, match="Release ещё не опубликован"):
+        check_for_update("0.10.1")
