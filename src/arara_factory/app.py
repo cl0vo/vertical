@@ -5,7 +5,7 @@ import traceback
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
-from PySide6.QtWidgets import QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, QSpinBox, QTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, QSpinBox, QTextEdit, QVBoxLayout, QWidget
 
 from .render import RenderOptions, render_reels
 
@@ -16,10 +16,11 @@ class RenderWorker(QThread):
     completed = Signal(list)
     failed = Signal(str)
 
-    def __init__(self, source: Path, brainrot: Path, output: Path, options: RenderOptions):
+    def __init__(self, source: Path, brainrot: Path, template: Path, output: Path, options: RenderOptions):
         super().__init__()
         self.source = source
         self.brainrot = brainrot
+        self.template = template
         self.output = output
         self.options = options
 
@@ -28,6 +29,7 @@ class RenderWorker(QThread):
             files = render_reels(
                 self.source,
                 self.brainrot,
+                self.template,
                 self.output,
                 self.options,
                 lambda n, s: self.progressed.emit(n, s),
@@ -41,8 +43,8 @@ class RenderWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('ARARA Factory')
-        self.resize(980, 760)
+        self.setWindowTitle('ARARA Factory — Hero')
+        self.resize(980, 790)
         self.worker = None
 
         root = QWidget()
@@ -53,7 +55,7 @@ class MainWindow(QMainWindow):
 
         title = QLabel('ARARA FACTORY')
         title.setObjectName('title')
-        subtitle = QLabel('Умная сборка вертикальных brainrot-рилсов')
+        subtitle = QLabel('Персонаж сверху · основной Reel по центру · полный бесшумный brainrot снизу')
         subtitle.setObjectName('subtitle')
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -62,33 +64,30 @@ class MainWindow(QMainWindow):
         form = QFormLayout(files)
         self.source = QLineEdit()
         self.brainrot = QLineEdit()
+        self.template = QLineEdit()
         self.output = QLineEdit(str(Path.home() / 'Videos' / 'ARARA Factory'))
-        form.addRow('Исходный Reel', self._picker(self.source, False))
-        form.addRow('Папка brainrot', self._picker(self.brainrot, True))
-        form.addRow('Папка результата', self._picker(self.output, True))
+        form.addRow('Готовый Reel со звуком', self._picker(self.source, 'video'))
+        form.addRow('Папка тихих brainrot-видео', self._picker(self.brainrot, 'folder'))
+        form.addRow('PNG-шаблон ARARA', self._picker(self.template, 'image'))
+        form.addRow('Папка результата', self._picker(self.output, 'folder'))
         layout.addWidget(files)
 
-        opts = QGroupBox('Монтажный движок')
+        opts = QGroupBox('Hero layout')
         of = QFormLayout(opts)
         self.variants = QSpinBox()
         self.variants.setRange(1, 20)
         self.variants.setValue(3)
-        self.chance = QDoubleSpinBox()
-        self.chance.setRange(0, 1)
-        self.chance.setSingleStep(.05)
-        self.chance.setValue(.65)
         self.font = QComboBox()
         self.font.addItems(['Arial Black', 'Montserrat ExtraBold', 'Impact'])
         self.y = QSpinBox()
-        self.y.setRange(900, 1700)
-        self.y.setValue(1380)
-        of.addRow('Количество версий', self.variants)
-        of.addRow('Плотность перебивок', self.chance)
+        self.y.setRange(850, 1260)
+        self.y.setValue(1120)
+        of.addRow('Количество вариантов', self.variants)
         of.addRow('Шрифт субтитров', self.font)
-        of.addRow('Высота субтитров', self.y)
+        of.addRow('Позиция субтитров', self.y)
         layout.addWidget(opts)
 
-        self.button = QPushButton('СОБРАТЬ REELS')
+        self.button = QPushButton('СОБРАТЬ HERO REELS')
         self.button.setObjectName('generate')
         self.button.clicked.connect(self.start)
         layout.addWidget(self.button)
@@ -102,37 +101,42 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.status)
         layout.addWidget(self.log)
 
-    def _picker(self, line: QLineEdit, folder: bool) -> QWidget:
+    def _picker(self, line: QLineEdit, kind: str) -> QWidget:
         box = QWidget()
-        h = QHBoxLayout(box)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.addWidget(line)
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(line)
         button = QPushButton('Выбрать')
-        button.clicked.connect(lambda: self.choose(line, folder))
-        h.addWidget(button)
+        button.clicked.connect(lambda: self.choose(line, kind))
+        row.addWidget(button)
         return box
 
-    def choose(self, line: QLineEdit, folder: bool) -> None:
-        value = QFileDialog.getExistingDirectory(self, 'Выбрать папку') if folder else QFileDialog.getOpenFileName(self, 'Выбрать видео', filter='Video (*.mp4 *.mov *.mkv *.webm)')[0]
+    def choose(self, line: QLineEdit, kind: str) -> None:
+        if kind == 'folder':
+            value = QFileDialog.getExistingDirectory(self, 'Выбрать папку')
+        elif kind == 'image':
+            value = QFileDialog.getOpenFileName(self, 'Выбрать PNG-шаблон', filter='PNG (*.png)')[0]
+        else:
+            value = QFileDialog.getOpenFileName(self, 'Выбрать видео', filter='Video (*.mp4 *.mov *.mkv *.webm)')[0]
         if value:
             line.setText(value)
 
     def start(self) -> None:
         source = Path(self.source.text().strip())
         brainrot = Path(self.brainrot.text().strip())
+        template = Path(self.template.text().strip())
         output = Path(self.output.text().strip())
-        if not source.is_file() or not brainrot.is_dir():
-            QMessageBox.warning(self, 'Не хватает файлов', 'Выбери исходное видео и папку с brainrot-клипами.')
+        if not source.is_file() or not brainrot.is_dir() or not template.is_file():
+            QMessageBox.warning(self, 'Не хватает файлов', 'Выбери Reel, папку brainrot и PNG-шаблон ARARA.')
             return
         options = RenderOptions(
             variants=self.variants.value(),
-            cutaway_chance=self.chance.value(),
             subtitle_y=self.y.value(),
             font=self.font.currentText(),
         )
         self.button.setEnabled(False)
         self.log.clear()
-        self.worker = RenderWorker(source, brainrot, output, options)
+        self.worker = RenderWorker(source, brainrot, template, output, options)
         self.worker.progressed.connect(self.on_progress)
         self.worker.logged.connect(self.log.append)
         self.worker.completed.connect(self.done)
@@ -146,7 +150,7 @@ class MainWindow(QMainWindow):
     def done(self, files: list[str]) -> None:
         self.button.setEnabled(True)
         self.status.setText(f'Готово: {len(files)} файлов')
-        QMessageBox.information(self, 'ARARA Factory', 'Рилсы успешно собраны.')
+        QMessageBox.information(self, 'ARARA Factory', 'Hero Reels успешно собраны.')
 
     def fail(self, error: str) -> None:
         self.button.setEnabled(True)
@@ -159,18 +163,18 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
     app.setStyleSheet('''
-QWidget { background:#0c0d12; color:#f3f3f6; font-family:Segoe UI; font-size:14px; }
-QLabel#title { font-size:34px; font-weight:900; color:#79ff43; }
-QLabel#subtitle { font-size:16px; color:#9da0ad; }
-QGroupBox { border:1px solid #292c37; border-radius:14px; margin-top:12px; padding:18px; background:#14161d; }
-QGroupBox::title { subcontrol-origin:margin; left:14px; padding:0 8px; color:#79ff43; font-weight:700; }
-QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit { background:#0d0f15; border:1px solid #303440; border-radius:8px; padding:9px; }
-QPushButton { background:#222632; border:1px solid #343947; border-radius:9px; padding:10px 16px; font-weight:700; }
-QPushButton:hover { border-color:#79ff43; }
-QPushButton:disabled { color:#666; }
-QPushButton#generate { background:#79ff43; color:#090a0d; font-size:17px; padding:15px; }
-QProgressBar { border:1px solid #303440; border-radius:7px; text-align:center; background:#0d0f15; }
-QProgressBar::chunk { background:#79ff43; border-radius:6px; }
+QWidget { background:#0b0b0e; color:#f4ead8; font-family:Segoe UI; font-size:14px; }
+QLabel#title { font-size:34px; font-weight:900; color:#e6ad45; }
+QLabel#subtitle { font-size:16px; color:#b8aa94; }
+QGroupBox { border:1px solid #5b421d; border-radius:14px; margin-top:12px; padding:18px; background:#15120f; }
+QGroupBox::title { subcontrol-origin:margin; left:14px; padding:0 8px; color:#e6ad45; font-weight:700; }
+QLineEdit, QComboBox, QSpinBox, QTextEdit { background:#0e0c0b; border:1px solid #594226; border-radius:8px; padding:9px; }
+QPushButton { background:#241c14; border:1px solid #684b27; border-radius:9px; padding:10px 16px; font-weight:700; }
+QPushButton:hover { border-color:#e6ad45; }
+QPushButton:disabled { color:#665e54; }
+QPushButton#generate { background:#d39a38; color:#0a0805; font-size:17px; padding:15px; }
+QProgressBar { border:1px solid #594226; border-radius:7px; text-align:center; background:#0e0c0b; }
+QProgressBar::chunk { background:#d39a38; border-radius:6px; }
 ''')
     window = MainWindow()
     window.show()
