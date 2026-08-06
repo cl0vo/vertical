@@ -1,5 +1,5 @@
 #define MyAppName "ARARA Factory"
-#define MyAppVersion "0.7.0"
+#define MyAppVersion "0.8.0"
 #define MyAppPublisher "ARARA"
 #define MyAppExeName "ARARA-Factory.exe"
 
@@ -40,9 +40,3 @@ Name: "{autodesktop}\ARARA Factory"; Filename: "{app}\{#MyAppExeName}"; Tasks: d
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Запустить ARARA Factory"; Flags: nowait postinstall skipifsilent
-
-[Code]
-function InitializeSetup(): Boolean;
-begin
-  Result := True;
-end;
