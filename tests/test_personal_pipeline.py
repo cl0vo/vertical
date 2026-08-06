@@ -41,13 +41,13 @@ def test_recognized_words_are_grouped_into_short_capcut_lines() -> None:
     words = [
         RecognizedWord('это', 0.0, 0.3, 0.9),
         RecognizedWord('будет', 0.32, 0.7, 0.9),
-        RecognizedWord('реальный', 0.72, 1.2, 0.9),
-        RecognizedWord('тест', 1.22, 1.55, 0.9),
-        RecognizedWord('программы', 1.58, 2.1, 0.9),
+        RecognizedWord('новый', 0.72, 1.05, 0.9),
+        RecognizedWord('тест', 1.08, 1.35, 0.9),
+        RecognizedWord('сейчас', 1.38, 1.8, 0.9),
     ]
     groups = group_words(words)
     assert len(groups) == 1
-    assert [word.text for word in groups[0].words] == ['это', 'будет', 'реальный', 'тест', 'программы']
+    assert [word.text for word in groups[0].words] == ['это', 'будет', 'новый', 'тест', 'сейчас']
 
 
 def test_long_pause_starts_a_new_caption_group() -> None:
