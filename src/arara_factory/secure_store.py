@@ -15,6 +15,9 @@ class _DataBlob(ctypes.Structure):
     ]
 
 
+CRYPTPROTECT_UI_FORBIDDEN = 0x1
+
+
 def _root() -> Path:
     local = os.environ.get("LOCALAPPDATA")
     base = Path(local) if local else Path.home() / "AppData" / "Local"
@@ -27,6 +30,36 @@ def credentials_path() -> Path:
     return _root() / "publishing-credentials.dat"
 
 
+def _windows_apis():
+    crypt32 = ctypes.windll.crypt32
+    kernel32 = ctypes.windll.kernel32
+    blob_pointer = ctypes.POINTER(_DataBlob)
+
+    crypt32.CryptProtectData.argtypes = [
+        blob_pointer,
+        ctypes.c_wchar_p,
+        blob_pointer,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        blob_pointer,
+    ]
+    crypt32.CryptProtectData.restype = ctypes.c_int
+    crypt32.CryptUnprotectData.argtypes = [
+        blob_pointer,
+        ctypes.c_void_p,
+        blob_pointer,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        blob_pointer,
+    ]
+    crypt32.CryptUnprotectData.restype = ctypes.c_int
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    return crypt32, kernel32
+
+
 def _protect_windows(data: bytes) -> bytes:
     buffer = ctypes.create_string_buffer(data)
     input_blob = _DataBlob(
@@ -34,22 +67,21 @@ def _protect_windows(data: bytes) -> bytes:
         ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)),
     )
     output_blob = _DataBlob()
-    crypt32 = ctypes.windll.crypt32
-    kernel32 = ctypes.windll.kernel32
+    crypt32, kernel32 = _windows_apis()
     if not crypt32.CryptProtectData(
         ctypes.byref(input_blob),
         "ARARA Factory publishing credentials",
         None,
         None,
         None,
-        0,
+        CRYPTPROTECT_UI_FORBIDDEN,
         ctypes.byref(output_blob),
     ):
         raise ctypes.WinError()
     try:
         return ctypes.string_at(output_blob.pbData, output_blob.cbData)
     finally:
-        kernel32.LocalFree(output_blob.pbData)
+        kernel32.LocalFree(ctypes.cast(output_blob.pbData, ctypes.c_void_p))
 
 
 def _unprotect_windows(data: bytes) -> bytes:
@@ -59,22 +91,21 @@ def _unprotect_windows(data: bytes) -> bytes:
         ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)),
     )
     output_blob = _DataBlob()
-    crypt32 = ctypes.windll.crypt32
-    kernel32 = ctypes.windll.kernel32
+    crypt32, kernel32 = _windows_apis()
     if not crypt32.CryptUnprotectData(
         ctypes.byref(input_blob),
         None,
         None,
         None,
         None,
-        0,
+        CRYPTPROTECT_UI_FORBIDDEN,
         ctypes.byref(output_blob),
     ):
         raise ctypes.WinError()
     try:
         return ctypes.string_at(output_blob.pbData, output_blob.cbData)
     finally:
-        kernel32.LocalFree(output_blob.pbData)
+        kernel32.LocalFree(ctypes.cast(output_blob.pbData, ctypes.c_void_p))
 
 
 def save_credentials(payload: dict[str, Any]) -> None:
