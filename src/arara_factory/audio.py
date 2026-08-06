@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import subprocess
 import wave
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+from .process_utils import run_hidden
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,7 @@ def extract_wav(
         '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le',
         str(target),
     ])
-    process = subprocess.run(cmd, text=True, capture_output=True)
+    process = run_hidden(cmd, text=True, capture_output=True)
     if process.returncode:
         raise RuntimeError((process.stderr or process.stdout)[-2000:])
 
