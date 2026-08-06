@@ -10,10 +10,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .audio import detect_pulses, extract_wav
+from .audio import extract_wav
 from .brainrot_index import choose_segment
 from .geometry import REFERENCE_HEIGHT, REFERENCE_WIDTH, canonical_layout
-from .subtitles import write_capcut_ass
+from .subtitles import write_word_ass
+from .transcribe import transcribe_wav
 
 VIDEO_EXTS = {'.mp4', '.mov', '.mkv', '.webm', '.avi'}
 MIN_REEL_SECONDS = 9.0
@@ -228,16 +229,18 @@ def render_reels(
 
         if options.subtitles_enabled:
             wav = work / 'audio.wav'
-            progress(4, 'Готовлю субтитры')
+            progress(3, 'Извлекаю речь')
             extract_wav(ffmpeg, source, wav, duration=reel_duration)
-            pulses = [pulse for pulse in detect_pulses(wav) if pulse.start < reel_duration]
-            if not pulses:
-                raise RuntimeError('Не удалось определить речь в аудио Reel.')
-            write_capcut_ass(pulses, ass, options.font, options.subtitle_y)
+            progress(6, 'Распознаю русские субтитры офлайн')
+            words = [word for word in transcribe_wav(wav) if word.start < reel_duration]
+            if not words:
+                raise RuntimeError('Русская речь не распознана. Проверь громкость голоса в Reel.')
+            write_word_ass(words, ass, options.font, options.subtitle_y)
+            log(f'Распознано слов: {len(words)}')
             subtitle_filter = f";[layout]subtitles='{_escape_filter_path(ass)}'[vout]"
 
         for variant in range(1, options.variants + 1):
-            progress(10 + int(84 * (variant - 1) / max(1, options.variants)), f'Собираю вариант {variant}')
+            progress(12 + int(82 * (variant - 1) / max(1, options.variants)), f'Собираю вариант {variant}')
             brainrot = rng.choice(clips)
             brain_info = probe_media(ffprobe, brainrot)
             if brain_info.duration < reel_duration:
