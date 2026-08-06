@@ -164,7 +164,8 @@ class MainWindow(QMainWindow):
         self.template.setPlaceholderText('Vertical overlay Arara.png')
         self.brainrot = DropLineEdit(str(self.settings.value('brainrot', '')))
         self.brainrot.setPlaceholderText('Один длинный GTA brainrot MP4')
-        self.output = DropLineEdit(str(self.settings.value('output', Path.home() / 'Videos' / 'ARARA Factory' / 'renders')))
+        default_output = Path.home() / 'Videos' / 'ARARA Factory' / 'renders'
+        self.output = DropLineEdit(str(self.settings.value('output', str(default_output))))
 
         permanent_form.addRow('Шаблон ARARA', self._picker(self.template, 'image'))
         permanent_form.addRow('Длинный brainrot', self._picker(self.brainrot, 'video_or_folder'))
@@ -289,7 +290,7 @@ class MainWindow(QMainWindow):
         return box
 
     def choose(self, line: QLineEdit, kind: str) -> None:
-        last_dir = str(self.settings.value('last_dir', Path.home()))
+        last_dir = str(self.settings.value('last_dir', str(Path.home())))
         if kind == 'folder':
             value = QFileDialog.getExistingDirectory(self, 'Выбрать папку', last_dir)
         elif kind == 'image':
@@ -319,7 +320,13 @@ class MainWindow(QMainWindow):
         self.settings.sync()
 
     def refresh_index_status(self) -> None:
-        path = Path(self.brainrot.text().strip())
+        text = self.brainrot.text().strip()
+        if not text:
+            self.index_status.setText('Выбери один длинный MP4 — путь сохранится навсегда')
+            self.index_button.setEnabled(False)
+            self.reset_button.setEnabled(False)
+            return
+        path = Path(text)
         if path.is_dir():
             count = sum(1 for item in path.rglob('*') if item.suffix.lower() in {'.mp4', '.mov', '.mkv', '.webm'})
             self.index_status.setText(f'Папка: {count} видео. Для каждого файла индекс создастся автоматически.')
@@ -330,7 +337,7 @@ class MainWindow(QMainWindow):
         self.index_button.setEnabled(path.is_file())
         self.reset_button.setEnabled(bool(info))
         if not path.is_file():
-            self.index_status.setText('Выбери один длинный MP4 — путь сохранится навсегда')
+            self.index_status.setText('Файл не найден — выбери его заново')
         elif not info:
             self.index_status.setText('Индекса пока нет. Он создастся автоматически при первом рендере.')
         elif not info.is_current:
@@ -340,7 +347,8 @@ class MainWindow(QMainWindow):
             self.index_status.setText(f'{minutes:.1f} мин · {info.remaining} из {info.total} свежих участков осталось')
 
     def index_brainrot(self) -> None:
-        video = Path(self.brainrot.text().strip())
+        text = self.brainrot.text().strip()
+        video = Path(text) if text else Path('__missing__')
         if not video.is_file():
             QMessageBox.warning(self, 'Нужен один файл', 'Выбери один длинный brainrot MP4.')
             return
@@ -362,7 +370,8 @@ class MainWindow(QMainWindow):
         self.log.setPlainText(error)
 
     def reset_brainrot_usage(self) -> None:
-        video = Path(self.brainrot.text().strip())
+        text = self.brainrot.text().strip()
+        video = Path(text) if text else Path('__missing__')
         if reset_usage(video):
             self.refresh_index_status()
             self.status.setText('Все участки снова доступны')
@@ -370,11 +379,15 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, 'ARARA Factory', 'Индекс пока не создан.')
 
     def _validate(self) -> tuple[Path, Path, Path, Path, str] | None:
-        source = Path(self.source.text().strip())
-        template = Path(self.template.text().strip())
-        output = Path(self.output.text().strip())
-        remote_url = self.remote_url.text().strip()
+        source_text = self.source.text().strip()
+        template_text = self.template.text().strip()
+        output_text = self.output.text().strip()
         brainrot_text = self.brainrot.text().strip()
+        remote_url = self.remote_url.text().strip()
+
+        source = Path(source_text) if source_text else Path('__missing__')
+        template = Path(template_text) if template_text else Path('__missing__')
+        output = Path(output_text) if output_text else Path.home() / 'Videos' / 'ARARA Factory' / 'renders'
         brainrot = Path(brainrot_text) if brainrot_text else Path.home() / 'Videos' / 'ARARA Factory' / 'brainrot-cache'
 
         if not source.is_file():
@@ -443,10 +456,11 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, 'Ошибка', error.splitlines()[-1] if error.splitlines() else error)
 
     def open_output(self) -> None:
-        folder = Path(self.output.text().strip())
+        output_text = self.output.text().strip()
+        folder = Path(output_text) if output_text else Path.home() / 'Videos' / 'ARARA Factory' / 'renders'
         folder.mkdir(parents=True, exist_ok=True)
         if sys.platform == 'win32':
-            os.startfile(folder)  # type: ignore[attr-defined]
+            os.startfile(str(folder))  # type: ignore[attr-defined]
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
