@@ -6,6 +6,7 @@ from arara_factory.geometry import (
     clamp_normalized_rect,
     normalized_to_rect,
 )
+from arara_factory.render import MediaInfo, RenderOptions, _brain_rect
 
 
 def test_default_scene_matches_lower_third_on_full_hd() -> None:
@@ -30,3 +31,15 @@ def test_dragged_scene_cannot_leave_canvas() -> None:
     assert safe.y == 0.5
     assert safe.width == 1.0
     assert safe.height == 0.5
+
+
+def test_editor_coordinates_are_used_by_renderer() -> None:
+    info = MediaInfo(width=1080, height=1920, duration=15.0, fps=30.0, has_audio=True)
+    options = RenderOptions(
+        brainrot_x=0.10,
+        brainrot_y=0.55,
+        brainrot_width=0.80,
+        brainrot_height=0.35,
+    )
+    rect = _brain_rect(info, options)
+    assert (rect.x, rect.y, rect.width, rect.height) == (108, 1056, 864, 672)
