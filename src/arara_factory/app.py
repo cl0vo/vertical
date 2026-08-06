@@ -11,8 +11,28 @@ from PySide6.QtWidgets import (
     QSpinBox, QTextEdit, QVBoxLayout, QWidget,
 )
 
+from .brainrot_index import build_index
 from .downloader import download_video
-from .render import RenderOptions, render_reels
+from .render import RenderOptions, _binary, render_reels
+
+
+class IndexWorker(QThread):
+    completed = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, video: Path):
+        super().__init__()
+        self.video = video
+
+    def run(self) -> None:
+        try:
+            ffprobe = _binary('ffprobe')
+            if not ffprobe:
+                raise RuntimeError('FFprobe не найден внутри программы.')
+            path = build_index(ffprobe, self.video, target_segments=600)
+            self.completed.emit(str(path))
+        except Exception:
+            self.failed.emit(traceback.format_exc())
 
 
 class RenderWorker(QThread):
@@ -21,18 +41,10 @@ class RenderWorker(QThread):
     completed = Signal(list)
     failed = Signal(str)
 
-    def __init__(
-        self,
-        source: Path,
-        brainrot_dir: Path,
-        template: Path,
-        output: Path,
-        options: RenderOptions,
-        remote_url: str = '',
-    ):
+    def __init__(self, source: Path, brainrot: Path, template: Path, output: Path, options: RenderOptions, remote_url: str = ''):
         super().__init__()
         self.source = source
-        self.brainrot_dir = brainrot_dir
+        self.brainrot = brainrot
         self.template = template
         self.output = output
         self.options = options
@@ -40,28 +52,27 @@ class RenderWorker(QThread):
 
     def run(self) -> None:
         try:
-            active_dir = self.brainrot_dir
+            active_source = self.brainrot
             if self.remote_url:
-                active_dir = Path.home() / 'Videos' / 'ARARA Factory' / 'brainrot-cache'
-                self.progressed.emit(2, 'Скачиваю brainrot')
+                cache = Path.home() / 'Videos' / 'ARARA Factory' / 'brainrot-cache'
+                self.progressed.emit(2, 'Скачиваю разрешённый brainrot')
 
                 def on_download(done: int, total: int) -> None:
                     if total:
-                        pct = min(20, 2 + int(done / total * 18))
-                        self.progressed.emit(pct, f'Скачиваю brainrot: {done // 1048576} / {total // 1048576} МБ')
+                        self.progressed.emit(min(18, 2 + int(done / total * 16)), f'Скачано {done // 1048576} / {total // 1048576} МБ')
                     else:
                         self.progressed.emit(8, f'Скачано {done // 1048576} МБ')
 
-                downloaded = download_video(self.remote_url, active_dir, on_download)
-                self.logged.emit(f'Brainrot: {downloaded}')
+                active_source = download_video(self.remote_url, cache, on_download)
+                self.logged.emit(f'Brainrot: {active_source}')
 
             files = render_reels(
                 self.source,
-                active_dir,
+                active_source,
                 self.template,
                 self.output,
                 self.options,
-                lambda n, s: self.progressed.emit(max(20, n), s),
+                lambda n, s: self.progressed.emit(max(18, n), s),
                 self.logged.emit,
             )
             self.completed.emit([str(x) for x in files])
@@ -72,19 +83,20 @@ class RenderWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('ARARA Factory — Hero')
-        self.resize(1020, 860)
+        self.setWindowTitle('ARARA Factory — Fast Hero')
+        self.resize(1040, 900)
         self.worker = None
+        self.index_worker = None
 
         root = QWidget()
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
         layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(16)
+        layout.setSpacing(15)
 
         title = QLabel('ARARA FACTORY')
         title.setObjectName('title')
-        subtitle = QLabel('ARARA сверху · основной Reel по центру · полный бесшумный brainrot снизу')
+        subtitle = QLabel('Один длинный brainrot → до 600 неповторяющихся участков → быстрый Hero Reel')
         subtitle.setObjectName('subtitle')
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -99,20 +111,27 @@ class MainWindow(QMainWindow):
         form.addRow('Папка результата', self._picker(self.output, 'folder'))
         layout.addWidget(files)
 
-        brain = QGroupBox('Brainrot — быстрый режим')
+        brain = QGroupBox('Brainrot-библиотека')
         bf = QFormLayout(brain)
         self.remote_url = QLineEdit()
-        self.remote_url.setPlaceholderText('Прямая разрешённая ссылка на .mp4 или .webm')
+        self.remote_url.setPlaceholderText('Прямая разрешённая ссылка на .mp4/.webm — необязательно')
         self.brainrot = QLineEdit()
+        self.brainrot.setPlaceholderText('Один длинный MP4 или папка с видео')
         bf.addRow('Скачать по ссылке', self.remote_url)
-        bf.addRow('Или локальная папка', self._picker(self.brainrot, 'folder'))
-        hint = QLabel('При наличии ссылки программа скачает 1 видео в кэш и сразу смонтирует. Повторно тот же файл не скачивается.')
-        hint.setWordWrap(True)
-        hint.setObjectName('hint')
-        bf.addRow('', hint)
+        bf.addRow('Локальный источник', self._picker(self.brainrot, 'video_or_folder'))
+        index_row = QWidget()
+        index_layout = QHBoxLayout(index_row)
+        index_layout.setContentsMargins(0, 0, 0, 0)
+        self.index_button = QPushButton('БЫСТРО ПРОИНДЕКСИРОВАТЬ 600 УЧАСТКОВ')
+        self.index_button.clicked.connect(self.index_brainrot)
+        self.index_status = QLabel('Индекс создаётся один раз и потом используется мгновенно.')
+        self.index_status.setObjectName('hint')
+        index_layout.addWidget(self.index_button)
+        index_layout.addWidget(self.index_status, 1)
+        bf.addRow('', index_row)
         layout.addWidget(brain)
 
-        opts = QGroupBox('Hero layout и субтитры')
+        opts = QGroupBox('Скорость и субтитры')
         of = QFormLayout(opts)
         self.variants = QSpinBox()
         self.variants.setRange(1, 10)
@@ -122,12 +141,21 @@ class MainWindow(QMainWindow):
         self.y = QSpinBox()
         self.y.setRange(850, 1260)
         self.y.setValue(1120)
+        self.speed = QComboBox()
+        self.speed.addItem('Максимально быстро', 'ultrafast')
+        self.speed.addItem('Быстро — рекомендуется', 'veryfast')
+        self.speed.addItem('Баланс качества', 'faster')
+        self.quality = QSpinBox()
+        self.quality.setRange(16, 28)
+        self.quality.setValue(20)
         of.addRow('Количество вариантов', self.variants)
+        of.addRow('Скорость рендера', self.speed)
+        of.addRow('Качество CRF', self.quality)
         of.addRow('Шрифт субтитров', self.font)
         of.addRow('Позиция субтитров', self.y)
         layout.addWidget(opts)
 
-        self.button = QPushButton('СКАЧАТЬ BRAINROT И СОБРАТЬ')
+        self.button = QPushButton('СОБРАТЬ БЫСТРЫЙ HERO REEL')
         self.button.setObjectName('generate')
         self.button.clicked.connect(self.start)
         layout.addWidget(self.button)
@@ -136,7 +164,7 @@ class MainWindow(QMainWindow):
         self.status = QLabel('Готов к работе')
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMaximumHeight(180)
+        self.log.setMaximumHeight(165)
         layout.addWidget(self.progress)
         layout.addWidget(self.status)
         layout.addWidget(self.log)
@@ -156,10 +184,36 @@ class MainWindow(QMainWindow):
             value = QFileDialog.getExistingDirectory(self, 'Выбрать папку')
         elif kind == 'image':
             value = QFileDialog.getOpenFileName(self, 'Выбрать PNG-шаблон', filter='PNG (*.png)')[0]
+        elif kind == 'video_or_folder':
+            value = QFileDialog.getOpenFileName(self, 'Выбрать длинное brainrot-видео', filter='Video (*.mp4 *.mov *.mkv *.webm)')[0]
+            if not value:
+                value = QFileDialog.getExistingDirectory(self, 'Или выбрать папку brainrot')
         else:
             value = QFileDialog.getOpenFileName(self, 'Выбрать видео', filter='Video (*.mp4 *.mov *.mkv *.webm)')[0]
         if value:
             line.setText(value)
+
+    def index_brainrot(self) -> None:
+        video = Path(self.brainrot.text().strip())
+        if not video.is_file():
+            QMessageBox.warning(self, 'Нужен один файл', 'Для индекса выбери один длинный brainrot MP4.')
+            return
+        self.index_button.setEnabled(False)
+        self.index_status.setText('Индексирую…')
+        self.index_worker = IndexWorker(video)
+        self.index_worker.completed.connect(self.index_done)
+        self.index_worker.failed.connect(self.index_failed)
+        self.index_worker.start()
+
+    def index_done(self, path: str) -> None:
+        self.index_button.setEnabled(True)
+        self.index_status.setText('Готово: до 600 участков без создания отдельных MP4.')
+        self.log.append(f'Индекс: {path}')
+
+    def index_failed(self, error: str) -> None:
+        self.index_button.setEnabled(True)
+        self.index_status.setText('Ошибка индексации')
+        self.log.setPlainText(error)
 
     def start(self) -> None:
         source = Path(self.source.text().strip())
@@ -172,14 +226,16 @@ class MainWindow(QMainWindow):
         if not source.is_file() or not template.is_file():
             QMessageBox.warning(self, 'Не хватает файлов', 'Выбери готовый Reel и PNG-шаблон ARARA.')
             return
-        if not remote_url and not brainrot.is_dir():
-            QMessageBox.warning(self, 'Нет brainrot', 'Вставь прямую разрешённую ссылку или выбери локальную папку.')
+        if not remote_url and not brainrot.exists():
+            QMessageBox.warning(self, 'Нет brainrot', 'Вставь прямую разрешённую ссылку или выбери длинный brainrot-файл.')
             return
 
         options = RenderOptions(
             variants=self.variants.value(),
             subtitle_y=self.y.value(),
             font=self.font.currentText(),
+            encoder_preset=self.speed.currentData(),
+            crf=self.quality.value(),
         )
         self.button.setEnabled(False)
         self.log.clear()
