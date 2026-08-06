@@ -36,7 +36,9 @@ def main() -> None:
     from . import app as app_module
     from .integrated_batch import install as install_batch
     from .publishing_ui import install as install_publishing
+    from .publishing_oauth_ui import install as install_publishing_oauth
 
     install_batch(app_module)
     install_publishing(app_module)
+    install_publishing_oauth(app_module)
     app_module.main()
