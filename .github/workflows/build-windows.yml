@@ -49,6 +49,36 @@ jobs:
           Copy-Item $bin.FullName ffmpeg.exe
           Copy-Item $probe.FullName ffprobe.exe
 
+      - name: Smoke-test real FFmpeg render
+        shell: powershell
+        run: |
+          .\ffmpeg.exe -y -hide_banner -loglevel error -f lavfi -i "color=c=blue:s=270x480:r=30" -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 9 -shortest -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac smoke-reel.mp4
+          .\ffmpeg.exe -y -hide_banner -loglevel error -f lavfi -i "testsrc2=s=320x180:r=30" -t 20 -c:v libx264 -preset ultrafast -pix_fmt yuv420p smoke-brainrot.mp4
+          @'
+          from pathlib import Path
+          from arara_factory.render import RenderOptions, _binary, probe_media, render_reels
+
+          output = Path('smoke-output')
+          made = render_reels(
+              Path('smoke-reel.mp4'),
+              Path('smoke-brainrot.mp4'),
+              output,
+              RenderOptions(
+                  subtitles_enabled=False,
+                  encoder_mode='cpu',
+                  encoder_preset='ultrafast',
+                  crf=28,
+              ),
+              log=print,
+          )
+          assert len(made) == 1 and made[0].is_file(), made
+          ffprobe = _binary('ffprobe')
+          assert ffprobe
+          duration = probe_media(ffprobe, made[0]).duration
+          assert 8.85 <= duration <= 9.15, duration
+          print(f'ARARA smoke render OK: {made[0]} ({duration:.3f}s)')
+          '@ | python -
+
       - name: Download offline Russian subtitle model
         shell: powershell
         run: |
@@ -58,6 +88,7 @@ jobs:
           if (-not (Test-Path 'assets\vosk-model-small-ru-0.22\am')) {
             throw 'Russian Vosk model was not downloaded correctly'
           }
+          python -c "from arara_factory.transcribe import model_path; print('Subtitle model:', model_path())"
 
       - name: Build installed application directory
         shell: powershell
