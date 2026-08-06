@@ -13,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from .audio import detect_pulses, extract_wav
-from .brainrot_index import choose_segment
+from .brainrot_index import choose_segment, mark_segment_used
 from .geometry import (
     REFERENCE_HEIGHT,
     REFERENCE_WIDTH,
@@ -428,6 +428,7 @@ def render_reels(
                 brainrot,
                 reel_duration,
                 seed=options.seed + variant + time.time_ns(),
+                mark_used=False,
             )
             final_out = _safe_output(
                 output_dir,
@@ -509,6 +510,7 @@ def render_reels(
                 if not partial_out.is_file() or partial_out.stat().st_size <= 0:
                     raise RuntimeError('FFmpeg завершился без готового выходного файла.')
                 partial_out.replace(final_out)
+                mark_segment_used(brainrot, segment.index)
             except Exception:
                 partial_out.unlink(missing_ok=True)
                 raise
