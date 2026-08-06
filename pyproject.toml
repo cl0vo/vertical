@@ -13,9 +13,9 @@ dependencies = [
 ]
 
 [project.scripts]
-arara-factory = "arara_factory.cli:app"
-arara-factory-gui = "arara_factory.app:main"
-arara-factory-batch = "arara_factory.app:main"
+arara-factory = "arara_factory.entry:main"
+arara-factory-gui = "arara_factory.entry:main"
+arara-factory-batch = "arara_factory.entry:main"
 
 [build-system]
 requires = ["hatchling"]
