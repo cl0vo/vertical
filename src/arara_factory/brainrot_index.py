@@ -16,6 +16,15 @@ class IndexedSegment:
     duration: float
 
 
+@dataclass(frozen=True)
+class IndexInfo:
+    total: int
+    used: int
+    remaining: int
+    duration: float
+    is_current: bool
+
+
 def _fingerprint(path: Path) -> str:
     stat = path.stat()
     raw = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}".encode("utf-8")
@@ -90,6 +99,41 @@ def load_or_build(ffprobe: str, video: Path, target_segments: int = 600) -> dict
             pass
     build_index(ffprobe, video, target_segments=target_segments)
     return json.loads(target.read_text(encoding="utf-8"))
+
+
+def get_index_info(video: Path) -> IndexInfo | None:
+    if not video.is_file():
+        return None
+    target = index_path(video)
+    if not target.exists():
+        return None
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        segments = payload.get("segments") or []
+        used = set(payload.get("used") or [])
+        current = payload.get("version") == INDEX_VERSION and payload.get("fingerprint") == _fingerprint(video)
+        return IndexInfo(
+            total=len(segments),
+            used=min(len(used), len(segments)),
+            remaining=max(0, len(segments) - len(used)),
+            duration=float(payload.get("duration") or 0.0),
+            is_current=current,
+        )
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def reset_usage(video: Path) -> bool:
+    target = index_path(video)
+    if not target.exists():
+        return False
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        payload["used"] = []
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 def choose_segment(ffprobe: str, video: Path, reel_duration: float, seed: int | None = None) -> IndexedSegment:
