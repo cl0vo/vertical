@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from arara_factory.updater import is_newer_version, release_from_payload, version_tuple
+import urllib.error
+
+from arara_factory.updater import (
+    check_for_update,
+    is_newer_version,
+    release_from_payload,
+    version_tuple,
+)
 
 
 def test_version_comparison() -> None:
@@ -32,3 +39,17 @@ def test_release_asset_is_selected() -> None:
 def test_current_or_missing_release_is_ignored() -> None:
     assert release_from_payload({"tag_name": "v0.10.0", "assets": []}, "0.10.0") is None
     assert release_from_payload({"tag_name": "v0.11.0", "assets": []}, "0.10.0") is None
+
+
+def test_http_404_means_no_release_yet(monkeypatch) -> None:
+    def missing_release(*args, **kwargs):
+        raise urllib.error.HTTPError(
+            url="https://api.github.com/repos/cl0vo/vertical/releases/latest",
+            code=404,
+            msg="Not Found",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr("arara_factory.updater.urllib.request.urlopen", missing_release)
+    assert check_for_update("0.10.1") is None
