@@ -1,7 +1,7 @@
 [project]
 name = "arara-factory"
-version = "0.6.0"
-description = "Personal one-click ARARA Hero-layout brainrot reels app"
+version = "0.7.0"
+description = "Personal installable one-click ARARA brainrot reels app for Windows"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
