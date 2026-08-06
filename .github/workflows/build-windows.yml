@@ -42,7 +42,7 @@ jobs:
       - name: Validate application
         run: |
           python -m compileall -q src launcher.py
-          python -c "import vosk; import PySide6.QtMultimedia; import PySide6.QtMultimediaWidgets; import arara_factory.app; import arara_factory.preview; import arara_factory.updater; print('ARARA imports OK')"
+          python -c "import PySide6.QtMultimedia; import PySide6.QtMultimediaWidgets; import arara_factory.app; import arara_factory.preview; import arara_factory.updater; print('ARARA imports OK')"
           pytest -q
 
       - name: Download FFmpeg
@@ -71,7 +71,8 @@ jobs:
               Path('smoke-brainrot.mp4'),
               output,
               RenderOptions(
-                  subtitles_enabled=False,
+                  subtitles_enabled=True,
+                  subtitle_mode='arara',
                   encoder_mode='cpu',
                   encoder_preset='ultrafast',
                   crf=28,
@@ -86,17 +87,6 @@ jobs:
           print(f'ARARA smoke render OK: {made[0]} ({duration:.3f}s)')
           '@ | python -
 
-      - name: Download offline Russian subtitle model
-        shell: powershell
-        run: |
-          New-Item -ItemType Directory -Force -Path assets | Out-Null
-          Invoke-WebRequest https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip -OutFile vosk-model.zip
-          Expand-Archive vosk-model.zip -DestinationPath assets
-          if (-not (Test-Path 'assets\vosk-model-small-ru-0.22\am')) {
-            throw 'Russian Vosk model was not downloaded correctly'
-          }
-          python -c "from arara_factory.transcribe import model_path; print('Subtitle model:', model_path())"
-
       - name: Build installed application directory
         shell: powershell
         run: |
@@ -107,12 +97,10 @@ jobs:
             '--onedir',
             '--name', 'ARARA-Factory',
             '--paths', 'src',
-            '--collect-all', 'vosk',
             '--hidden-import', 'PySide6.QtMultimedia',
             '--hidden-import', 'PySide6.QtMultimediaWidgets',
             '--add-binary', 'ffmpeg.exe;.',
             '--add-binary', 'ffprobe.exe;.',
-            '--add-data', 'assets\vosk-model-small-ru-0.22;assets\vosk-model-small-ru-0.22',
             'launcher.py'
           )
           python -m PyInstaller @pyiArgs
@@ -172,7 +160,7 @@ jobs:
           if ($exists) {
             gh release upload $tag $asset --repo $repo --clobber
           } else {
-            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "Embedded preview, compact interface and one-click self-update."
+            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "ARARA Timing subtitles, embedded preview and safe one-click updater."
           }
           if ($LASTEXITCODE -ne 0) { throw 'GitHub Release was not published' }
 
