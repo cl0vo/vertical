@@ -1,7 +1,7 @@
 [project]
 name = "arara-factory"
-version = "0.13.0"
-description = "Personal Windows app with one-click resumable batches from long ARARA recordings"
+version = "0.13.1"
+description = "Personal Windows app with silent background FFmpeg jobs and live batch progress"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
