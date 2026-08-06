@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -27,19 +28,17 @@ from PySide6.QtWidgets import (
 )
 
 from .brainrot_index import build_index, get_index_info, reset_usage
-from .render import RenderOptions, _binary, render_reels
+from .render import (
+    MAX_REEL_SECONDS,
+    MIN_REEL_SECONDS,
+    RenderOptions,
+    _binary,
+    output_duration,
+    probe_media,
+    render_reels,
+)
 
 VIDEO_EXTENSIONS = {'.mp4', '.mov', '.mkv', '.webm', '.avi'}
-
-
-def _default_template() -> str:
-    """Return a bundled canonical template when it is included in the build."""
-    roots = [Path(getattr(sys, '_MEIPASS', Path.cwd())), Path(sys.executable).parent]
-    for root in roots:
-        candidate = root / 'assets' / 'arara_template.png'
-        if candidate.is_file():
-            return str(candidate)
-    return ''
 
 
 class FileDropCard(QFrame):
@@ -49,11 +48,11 @@ class FileDropCard(QFrame):
         super().__init__()
         self.setObjectName('dropCard')
         self.setAcceptDrops(True)
-        self.setMinimumHeight(138)
+        self.setMinimumHeight(150)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 18, 22, 18)
-        layout.setSpacing(8)
+        layout.setContentsMargins(22, 17, 22, 17)
+        layout.setSpacing(7)
 
         self.title_label = QLabel(title)
         self.title_label.setObjectName('cardTitle')
@@ -62,8 +61,10 @@ class FileDropCard(QFrame):
         self.hint_label.setWordWrap(True)
         self.path_edit = QLineEdit(saved_path)
         self.path_edit.setReadOnly(True)
-        self.path_edit.setPlaceholderText('Файл ещё не выбран')
-        self.path_edit.textChanged.connect(self._emit_change)
+        self.path_edit.setPlaceholderText('Перетащи видео сюда или нажми «Выбрать»')
+        self.path_edit.textChanged.connect(self.changed.emit)
+        self.status_label = QLabel('Файл ещё не выбран')
+        self.status_label.setObjectName('fileStatus')
 
         self.choose_button = QPushButton(button_text)
         self.choose_button.setObjectName('chooseButton')
@@ -75,6 +76,7 @@ class FileDropCard(QFrame):
         layout.addWidget(self.title_label)
         layout.addWidget(self.hint_label)
         layout.addLayout(bottom)
+        layout.addWidget(self.status_label)
 
     @property
     def path(self) -> str:
@@ -85,9 +87,13 @@ class FileDropCard(QFrame):
 
     def clear_path(self) -> None:
         self.path_edit.clear()
+        self.set_status('Файл ещё не выбран', 'neutral')
 
-    def _emit_change(self, value: str) -> None:
-        self.changed.emit(value)
+    def set_status(self, text: str, state: str = 'neutral') -> None:
+        self.status_label.setText(text)
+        self.status_label.setProperty('state', state)
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -109,16 +115,15 @@ class FileDropCard(QFrame):
         event.ignore()
 
 
-class PathPicker(QWidget):
+class FolderPicker(QWidget):
     changed = Signal(str)
 
-    def __init__(self, value: str, placeholder: str, mode: str):
+    def __init__(self, value: str):
         super().__init__()
-        self.mode = mode
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.line = QLineEdit(value)
-        self.line.setPlaceholderText(placeholder)
+        self.line.setPlaceholderText('Папка готовых роликов')
         self.line.textChanged.connect(self.changed.emit)
         self.button = QPushButton('Выбрать')
         self.button.clicked.connect(self.choose)
@@ -130,11 +135,8 @@ class PathPicker(QWidget):
         return self.line.text().strip()
 
     def choose(self) -> None:
-        start = str(Path(self.path).parent) if self.path else str(Path.home())
-        if self.mode == 'folder':
-            value = QFileDialog.getExistingDirectory(self, 'Выбрать папку', start)
-        else:
-            value = QFileDialog.getOpenFileName(self, 'Выбрать PNG-шаблон ARARA', start, 'PNG (*.png)')[0]
+        start = self.path or str(Path.home() / 'Videos')
+        value = QFileDialog.getExistingDirectory(self, 'Куда сохранять готовые ролики', start)
         if value:
             self.line.setText(value)
 
@@ -152,7 +154,13 @@ class IndexWorker(QThread):
             ffprobe = _binary('ffprobe')
             if not ffprobe:
                 raise RuntimeError('FFprobe не найден внутри программы.')
-            target = build_index(ffprobe, self.video, target_segments=600)
+            target = build_index(
+                ffprobe,
+                self.video,
+                target_segments=600,
+                min_clip=MIN_REEL_SECONDS,
+                max_clip=MAX_REEL_SECONDS,
+            )
             self.completed.emit(str(target))
         except Exception:
             self.failed.emit(traceback.format_exc())
@@ -164,18 +172,10 @@ class RenderWorker(QThread):
     completed = Signal(list)
     failed = Signal(str)
 
-    def __init__(
-        self,
-        source: Path,
-        brainrot: Path,
-        template: Path,
-        output: Path,
-        options: RenderOptions,
-    ):
+    def __init__(self, source: Path, brainrot: Path, output: Path, options: RenderOptions):
         super().__init__()
         self.source = source
         self.brainrot = brainrot
-        self.template = template
         self.output = output
         self.options = options
 
@@ -184,7 +184,6 @@ class RenderWorker(QThread):
             files = render_reels(
                 self.source,
                 self.brainrot,
-                self.template,
                 self.output,
                 self.options,
                 lambda value, text: self.progressed.emit(value, text),
@@ -201,36 +200,49 @@ class MainWindow(QMainWindow):
         self.settings = QSettings('ARARA', 'ARARA Factory')
         self.render_worker: RenderWorker | None = None
         self.index_worker: IndexWorker | None = None
+        self.reel_valid = False
+        self.brainrot_valid = False
 
         self.setWindowTitle('ARARA Factory')
-        self.resize(960, 790)
-        self.setMinimumSize(820, 690)
+        self.resize(940, 790)
+        self.setMinimumSize(820, 680)
 
         root = QWidget()
         self.setCentralWidget(root)
         main = QVBoxLayout(root)
-        main.setContentsMargins(34, 28, 34, 28)
-        main.setSpacing(16)
+        main.setContentsMargins(32, 25, 32, 25)
+        main.setSpacing(14)
 
+        header_row = QHBoxLayout()
         header = QLabel('ARARA FACTORY')
         header.setObjectName('title')
-        description = QLabel('Перетащи два видео, проверь короткий тест и собери готовый вертикальный Reel')
+        version = QLabel('v0.8 · PERSONAL')
+        version.setObjectName('version')
+        header_row.addWidget(header)
+        header_row.addStretch(1)
+        header_row.addWidget(version, alignment=Qt.AlignmentFlag.AlignTop)
+        main.addLayout(header_row)
+
+        description = QLabel(
+            'Готовый ARARA Reel + длинный Car Falling → brainrot на всю нижнюю треть → ролик 9–15 секунд'
+        )
         description.setObjectName('subtitle')
-        main.addWidget(header)
+        description.setWordWrap(True)
         main.addWidget(description)
 
         self.reel_card = FileDropCard(
-            '1. ТВОЙ REEL',
-            'Перетащи сюда вертикальное видео со звуком. Его звук останется в готовом ролике.',
+            '1. ГОТОВЫЙ ARARA REEL',
+            'Вертикальный Reel со звуком и твоим оформлением. 9–15 секунд; более длинный автоматически обрежется до 15.',
             'Выбрать Reel',
         )
         self.reel_card.choose_button.clicked.connect(self.choose_reel)
+        self.reel_card.changed.connect(self.inspect_reel)
         main.addWidget(self.reel_card)
 
         saved_brainrot = str(self.settings.value('brainrot', ''))
         self.brainrot_card = FileDropCard(
             '2. ДЛИННЫЙ BRAINROT',
-            'Перетащи часовой Car Falling, GTA, Minecraft или другое длинное фоновое видео. Программа запомнит его.',
+            'Часовой Car Falling 640×360 подходит. Программа сама берёт новый кусок ровно той же длины и увеличивает машину.',
             'Выбрать brainrot',
             saved_brainrot,
         )
@@ -267,7 +279,7 @@ class MainWindow(QMainWindow):
         self.open_button = QPushButton('Открыть готовые ролики')
         self.open_button.clicked.connect(self.open_output)
         self.next_button = QPushButton('Следующий Reel')
-        self.next_button.clicked.connect(self.reel_card.clear_path)
+        self.next_button.clicked.connect(self.next_reel)
         utility_row.addWidget(self.settings_button)
         utility_row.addWidget(self.open_button)
         utility_row.addWidget(self.next_button)
@@ -277,25 +289,30 @@ class MainWindow(QMainWindow):
         self.settings_panel = QFrame()
         self.settings_panel.setObjectName('settingsPanel')
         settings_layout = QFormLayout(self.settings_panel)
-        settings_layout.setContentsMargins(18, 16, 18, 16)
+        settings_layout.setContentsMargins(18, 15, 18, 15)
 
-        bundled = _default_template()
-        saved_template = str(self.settings.value('template', bundled))
         default_output = Path.home() / 'Videos' / 'ARARA Factory' / 'renders'
-        saved_output = str(self.settings.value('output', str(default_output)))
-        self.template_picker = PathPicker(saved_template, 'Выбери PNG-шаблон один раз', 'image')
-        self.output_picker = PathPicker(saved_output, 'Папка готовых роликов', 'folder')
+        self.output_picker = FolderPicker(str(self.settings.value('output', str(default_output))))
+
+        self.zoom = QDoubleSpinBox()
+        self.zoom.setRange(1.0, 1.5)
+        self.zoom.setSingleStep(0.05)
+        self.zoom.setDecimals(2)
+        self.zoom.setSuffix('×')
+        self.zoom.setValue(float(self.settings.value('zoom', 1.25)))
 
         self.subtitle_y = QSpinBox()
-        self.subtitle_y.setRange(850, 1260)
-        self.subtitle_y.setValue(int(self.settings.value('subtitle_y', 1120)))
+        self.subtitle_y.setRange(850, 1250)
+        self.subtitle_y.setValue(int(self.settings.value('subtitle_y', 1050)))
+
+        self.subtitles_enabled = QCheckBox('Добавлять субтитры поверх главного окна')
+        self.subtitles_enabled.setChecked(self.settings.value('subtitles_enabled', True, type=bool))
 
         self.encoder = QComboBox()
         self.encoder.addItem('Автоматически: NVIDIA → CPU', 'auto')
         self.encoder.addItem('Только NVIDIA', 'nvidia')
         self.encoder.addItem('Только процессор', 'cpu')
-        saved_encoder = str(self.settings.value('encoder', 'auto'))
-        self.encoder.setCurrentIndex(max(0, self.encoder.findData(saved_encoder)))
+        self.encoder.setCurrentIndex(max(0, self.encoder.findData(str(self.settings.value('encoder', 'auto')))))
 
         self.quality = QSpinBox()
         self.quality.setRange(16, 28)
@@ -304,18 +321,19 @@ class MainWindow(QMainWindow):
         self.auto_open = QCheckBox('Открывать папку после сборки')
         self.auto_open.setChecked(self.settings.value('auto_open', True, type=bool))
 
-        settings_layout.addRow('PNG-шаблон ARARA', self.template_picker)
         settings_layout.addRow('Куда сохранять', self.output_picker)
+        settings_layout.addRow('Приближение машины', self.zoom)
         settings_layout.addRow('Высота субтитров', self.subtitle_y)
+        settings_layout.addRow('', self.subtitles_enabled)
         settings_layout.addRow('Ускорение', self.encoder)
         settings_layout.addRow('Качество', self.quality)
         settings_layout.addRow('', self.auto_open)
-        self.settings_panel.setVisible(not bool(saved_template))
+        self.settings_panel.setVisible(False)
         main.addWidget(self.settings_panel)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
-        self.status = QLabel('Готова к работе')
+        self.status = QLabel('Выбери Reel и длинный brainrot')
         self.status.setObjectName('status')
         main.addWidget(self.progress)
         main.addWidget(self.status)
@@ -330,29 +348,21 @@ class MainWindow(QMainWindow):
         main.addWidget(self.log_button, alignment=Qt.AlignmentFlag.AlignLeft)
         main.addWidget(self.log)
 
-        for control in (
-            self.template_picker,
-            self.output_picker,
-            self.subtitle_y,
-            self.encoder,
-            self.quality,
-            self.auto_open,
-        ):
-            if hasattr(control, 'changed'):
-                control.changed.connect(self.save_preferences)
-            elif hasattr(control, 'valueChanged'):
-                control.valueChanged.connect(self.save_preferences)
-            elif hasattr(control, 'currentIndexChanged'):
-                control.currentIndexChanged.connect(self.save_preferences)
-            elif hasattr(control, 'toggled'):
-                control.toggled.connect(self.save_preferences)
+        self.output_picker.changed.connect(self.save_preferences)
+        self.zoom.valueChanged.connect(self.save_preferences)
+        self.subtitle_y.valueChanged.connect(self.save_preferences)
+        self.subtitles_enabled.toggled.connect(self.save_preferences)
+        self.encoder.currentIndexChanged.connect(self.save_preferences)
+        self.quality.valueChanged.connect(self.save_preferences)
+        self.auto_open.toggled.connect(self.save_preferences)
 
-        self.refresh_library_status()
+        self.inspect_brainrot()
+        self.refresh_ready_state()
 
     def choose_reel(self) -> None:
         value = QFileDialog.getOpenFileName(
             self,
-            'Выбрать готовый Reel',
+            'Выбрать готовый ARARA Reel',
             str(Path.home() / 'Videos'),
             'Видео (*.mp4 *.mov *.mkv *.webm *.avi)',
         )[0]
@@ -370,39 +380,98 @@ class MainWindow(QMainWindow):
         if value:
             self.brainrot_card.set_path(value)
 
+    def _probe(self, path: Path):
+        ffprobe = _binary('ffprobe')
+        if not ffprobe:
+            raise RuntimeError('FFprobe не найден внутри программы.')
+        return probe_media(ffprobe, path)
+
+    def inspect_reel(self, value: str) -> None:
+        path = Path(value) if value else Path('__missing__')
+        self.reel_valid = False
+        if not path.is_file():
+            self.reel_card.set_status('Выбери готовый Reel', 'neutral')
+            self.refresh_ready_state()
+            return
+        try:
+            info = self._probe(path)
+            ratio = info.width / info.height
+            if abs(ratio - 9 / 16) > 0.015:
+                self.reel_card.set_status(f'{info.width}×{info.height} · нужен вертикальный формат 9:16', 'error')
+            elif not info.has_audio:
+                self.reel_card.set_status('В видео нет звука — нужен Reel с аудиодорожкой', 'error')
+            elif info.duration < MIN_REEL_SECONDS - 0.05:
+                self.reel_card.set_status(
+                    f'{info.duration:.1f} сек · слишком коротко, минимум 9 секунд', 'error'
+                )
+            else:
+                final = output_duration(info.duration)
+                if info.duration > MAX_REEL_SECONDS + 0.05:
+                    self.reel_card.set_status(
+                        f'{info.width}×{info.height} · {info.duration:.1f} сек → автоматически обрежется до {final:.0f} сек',
+                        'warning',
+                    )
+                else:
+                    self.reel_card.set_status(
+                        f'{info.width}×{info.height} · {info.duration:.1f} сек · готов к сборке', 'ok'
+                    )
+                self.reel_valid = True
+        except Exception as exc:
+            self.reel_card.set_status(str(exc), 'error')
+        self.refresh_ready_state()
+
     def on_brainrot_changed(self, value: str) -> None:
         self.settings.setValue('brainrot', value)
         self.settings.sync()
-        self.refresh_library_status()
+        self.inspect_brainrot()
+
+    def inspect_brainrot(self) -> None:
+        path_text = self.brainrot_card.path
+        path = Path(path_text) if path_text else Path('__missing__')
+        self.brainrot_valid = False
+        if not path.is_file():
+            self.brainrot_card.set_status('Выбери длинный Car Falling или другой brainrot', 'neutral')
+            self.library_status.setText('Brainrot ещё не выбран')
+            self.prepare_button.setEnabled(False)
+            self.reset_button.setEnabled(False)
+            self.refresh_ready_state()
+            return
+        try:
+            info = self._probe(path)
+            if info.duration < MAX_REEL_SECONDS:
+                self.brainrot_card.set_status('Видео короче 15 секунд — нужен длинный brainrot', 'error')
+            else:
+                orientation = 'горизонтальный' if info.width >= info.height else 'вертикальный'
+                self.brainrot_card.set_status(
+                    f'{info.width}×{info.height} · {info.duration / 60:.1f} мин · {orientation} · zoom {self.zoom.value():.2f}×',
+                    'ok',
+                )
+                self.brainrot_valid = True
+            index_info = get_index_info(path)
+            self.prepare_button.setEnabled(True)
+            self.reset_button.setEnabled(bool(index_info))
+            if not index_info:
+                self.library_status.setText('Индекс создастся автоматически при первой сборке')
+            elif not index_info.is_current:
+                self.library_status.setText('Видео изменилось · индекс обновится автоматически')
+            else:
+                self.library_status.setText(
+                    f'Осталось {index_info.remaining} из {index_info.total} свежих участков'
+                )
+        except Exception as exc:
+            self.brainrot_card.set_status(str(exc), 'error')
+        self.refresh_ready_state()
 
     def save_preferences(self, *args) -> None:
-        self.settings.setValue('template', self.template_picker.path)
+        self.settings.setValue('brainrot', self.brainrot_card.path)
         self.settings.setValue('output', self.output_picker.path)
+        self.settings.setValue('zoom', self.zoom.value())
         self.settings.setValue('subtitle_y', self.subtitle_y.value())
+        self.settings.setValue('subtitles_enabled', self.subtitles_enabled.isChecked())
         self.settings.setValue('encoder', self.encoder.currentData())
         self.settings.setValue('quality', self.quality.value())
         self.settings.setValue('auto_open', self.auto_open.isChecked())
         self.settings.sync()
-
-    def refresh_library_status(self) -> None:
-        path_text = self.brainrot_card.path
-        path = Path(path_text) if path_text else Path('__missing__')
-        if not path.is_file():
-            self.library_status.setText('Выбери один длинный MP4 — программа его запомнит')
-            self.prepare_button.setEnabled(False)
-            self.reset_button.setEnabled(False)
-            return
-        info = get_index_info(path)
-        self.prepare_button.setEnabled(True)
-        self.reset_button.setEnabled(bool(info))
-        if not info:
-            self.library_status.setText('Готов к использованию · индекс создастся автоматически')
-        elif not info.is_current:
-            self.library_status.setText('Видео изменилось · индекс обновится автоматически')
-        else:
-            self.library_status.setText(
-                f'{info.duration / 60:.1f} мин · осталось {info.remaining} из {info.total} свежих участков'
-            )
 
     def prepare_brainrot(self) -> None:
         path = Path(self.brainrot_card.path)
@@ -418,40 +487,39 @@ class MainWindow(QMainWindow):
 
     def index_done(self, target: str) -> None:
         self.log.append(f'Индекс: {target}')
-        self.refresh_library_status()
         self.status.setText('Brainrot подготовлен')
+        self.inspect_brainrot()
 
     def index_failed(self, error: str) -> None:
-        self.prepare_button.setEnabled(True)
         self.log.setPlainText(error)
         self.log.setVisible(True)
         self.library_status.setText('Не удалось подготовить brainrot')
         QMessageBox.critical(self, 'Ошибка индексации', error.splitlines()[-1])
+        self.inspect_brainrot()
 
     def reset_brainrot(self) -> None:
         path = Path(self.brainrot_card.path)
         if reset_usage(path):
-            self.refresh_library_status()
+            self.inspect_brainrot()
             self.status.setText('Все brainrot-участки снова доступны')
+
+    def refresh_ready_state(self) -> None:
+        ready = self.reel_valid and self.brainrot_valid
+        busy = bool(self.render_worker and self.render_worker.isRunning())
+        self.preview_button.setEnabled(ready and not busy)
+        self.render_button.setEnabled(ready and not busy)
+        if ready and not busy:
+            self.status.setText('Всё готово · сначала можно сделать тест 5 секунд')
 
     def start_render(self, preview: bool) -> None:
         source = Path(self.reel_card.path)
         brainrot = Path(self.brainrot_card.path)
-        template = Path(self.template_picker.path)
         output = Path(self.output_picker.path)
-
-        if not source.is_file():
-            QMessageBox.warning(self, 'Нужен Reel', 'Перетащи или выбери вертикальный Reel со звуком.')
-            return
-        if not brainrot.is_file():
-            QMessageBox.warning(self, 'Нужен brainrot', 'Перетащи или выбери длинное brainrot-видео.')
-            return
-        if not template.is_file():
-            self.settings_panel.setVisible(True)
-            QMessageBox.warning(self, 'Нужен шаблон', 'В настройках выбери PNG-шаблон ARARA. Это потребуется только один раз.')
+        if not self.reel_valid or not self.brainrot_valid:
+            QMessageBox.warning(self, 'Проверь файлы', 'Нужны подходящий Reel и длинный brainrot.')
             return
         if not self.output_picker.path:
-            QMessageBox.warning(self, 'Нужна папка', 'Выбери папку для готовых роликов.')
+            QMessageBox.warning(self, 'Нужна папка', 'В настройках выбери папку для готовых роликов.')
             return
 
         self.save_preferences()
@@ -463,13 +531,15 @@ class MainWindow(QMainWindow):
             crf=self.quality.value(),
             encoder_mode=str(self.encoder.currentData()),
             preview_seconds=5.0 if preview else None,
+            brainrot_zoom=self.zoom.value(),
+            subtitles_enabled=self.subtitles_enabled.isChecked(),
         )
 
         self.set_busy(True)
         self.log.clear()
         self.progress.setValue(0)
         self.status.setText('Запускаю тест…' if preview else 'Собираю готовый Reel…')
-        self.render_worker = RenderWorker(source, brainrot, template, output, options)
+        self.render_worker = RenderWorker(source, brainrot, output, options)
         self.render_worker.progressed.connect(self.on_progress)
         self.render_worker.logged.connect(self.log.append)
         self.render_worker.completed.connect(self.render_done)
@@ -477,9 +547,10 @@ class MainWindow(QMainWindow):
         self.render_worker.start()
 
     def set_busy(self, busy: bool) -> None:
-        self.preview_button.setEnabled(not busy)
-        self.render_button.setEnabled(not busy)
-        self.prepare_button.setEnabled(not busy and Path(self.brainrot_card.path).is_file())
+        self.preview_button.setEnabled(not busy and self.reel_valid and self.brainrot_valid)
+        self.render_button.setEnabled(not busy and self.reel_valid and self.brainrot_valid)
+        self.prepare_button.setEnabled(not busy and self.brainrot_valid)
+        self.next_button.setEnabled(not busy)
 
     def on_progress(self, value: int, text: str) -> None:
         self.progress.setValue(value)
@@ -489,7 +560,7 @@ class MainWindow(QMainWindow):
         self.set_busy(False)
         self.progress.setValue(100)
         self.status.setText(f'Готово: {Path(files[0]).name}' if files else 'Готово')
-        self.refresh_library_status()
+        self.inspect_brainrot()
         if self.auto_open.isChecked():
             self.open_output()
         QMessageBox.information(self, 'ARARA Factory', 'Ролик успешно собран.')
@@ -501,6 +572,13 @@ class MainWindow(QMainWindow):
         self.log.setVisible(True)
         self.log_button.setText('Скрыть технический журнал')
         QMessageBox.critical(self, 'Ошибка', error.splitlines()[-1])
+
+    def next_reel(self) -> None:
+        self.reel_card.clear_path()
+        self.reel_valid = False
+        self.progress.setValue(0)
+        self.status.setText('Перетащи следующий Reel')
+        self.refresh_ready_state()
 
     def open_output(self) -> None:
         path = Path(self.output_picker.path)
@@ -526,118 +604,45 @@ def main() -> None:
     app.setApplicationName('ARARA Factory')
     app.setOrganizationName('ARARA')
     app.setStyleSheet('''
-QWidget {
-    background: #0b0a0d;
-    color: #f4ecdf;
-    font-family: "Segoe UI";
-    font-size: 14px;
-}
-QLabel#title {
-    color: #e7ad43;
-    font-size: 36px;
-    font-weight: 900;
-    letter-spacing: 2px;
-}
-QLabel#subtitle {
-    color: #aa9d8d;
-    font-size: 16px;
-    margin-bottom: 4px;
-}
-QFrame#dropCard {
-    background: #151117;
-    border: 2px dashed #6e502c;
-    border-radius: 16px;
-}
-QFrame#dropCard:hover {
-    border-color: #e7ad43;
-    background: #19131b;
-}
-QLabel#cardTitle {
-    color: #f1c36d;
-    font-size: 20px;
-    font-weight: 800;
-}
-QLabel#cardHint {
-    color: #a79a8b;
-    font-size: 13px;
-}
-QLabel#libraryStatus {
-    color: #bcae9b;
-    padding: 5px 2px;
-}
-QLabel#status {
-    color: #dfc89f;
-    font-weight: 600;
-}
-QFrame#settingsPanel {
-    background: #121014;
-    border: 1px solid #4c3923;
-    border-radius: 12px;
-}
-QLineEdit, QComboBox, QSpinBox, QTextEdit {
-    background: #0d0b0e;
-    color: #f4ecdf;
-    border: 1px solid #4e3b27;
-    border-radius: 8px;
-    padding: 9px;
-    selection-background-color: #8d6429;
+QWidget { background: #0b0a0d; color: #f4ecdf; font-family: "Segoe UI"; font-size: 14px; }
+QLabel#title { color: #e7ad43; font-size: 34px; font-weight: 900; letter-spacing: 2px; }
+QLabel#version { color: #79664f; font-size: 11px; font-weight: 700; padding-top: 9px; }
+QLabel#subtitle { color: #aa9d8d; font-size: 15px; margin-bottom: 3px; }
+QFrame#dropCard { background: #151117; border: 2px dashed #6e502c; border-radius: 16px; }
+QFrame#dropCard:hover { border-color: #e7ad43; background: #19131b; }
+QLabel#cardTitle { color: #f1c36d; font-size: 19px; font-weight: 800; }
+QLabel#cardHint { color: #a79a8b; font-size: 13px; }
+QLabel#fileStatus { color: #8f8477; font-size: 12px; font-weight: 600; }
+QLabel#fileStatus[state="ok"] { color: #62d68a; }
+QLabel#fileStatus[state="warning"] { color: #e8b85b; }
+QLabel#fileStatus[state="error"] { color: #ef7373; }
+QLabel#libraryStatus { color: #bcae9b; padding: 4px 2px; }
+QLabel#status { color: #dfc89f; font-weight: 600; }
+QFrame#settingsPanel { background: #121014; border: 1px solid #4c3923; border-radius: 12px; }
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
+    background: #0d0b0e; color: #f4ecdf; border: 1px solid #4e3b27;
+    border-radius: 8px; padding: 8px; selection-background-color: #8d6429;
 }
 QPushButton {
-    background: #241b14;
-    color: #eee3d3;
-    border: 1px solid #6b4d29;
-    border-radius: 9px;
-    padding: 10px 15px;
-    font-weight: 650;
+    background: #241b14; color: #eee3d3; border: 1px solid #6b4d29;
+    border-radius: 9px; padding: 9px 14px; font-weight: 650;
 }
-QPushButton:hover {
-    border-color: #e7ad43;
-    background: #2c2117;
-}
-QPushButton:disabled {
-    color: #655e56;
-    border-color: #31291f;
-    background: #151210;
-}
-QPushButton#chooseButton {
-    min-width: 145px;
-}
-QPushButton#preview {
-    background: #252029;
-    min-height: 28px;
-}
+QPushButton:hover { border-color: #e7ad43; background: #2c2117; }
+QPushButton:disabled { color: #655e56; border-color: #31291f; background: #151210; }
+QPushButton#chooseButton { min-width: 145px; }
+QPushButton#preview { background: #252029; min-height: 28px; }
 QPushButton#generate {
-    background: #d99d37;
-    color: #0b0804;
-    border-color: #f1be63;
-    font-size: 17px;
-    font-weight: 900;
-    min-height: 32px;
+    background: #d99d37; color: #0b0804; border-color: #f1be63;
+    font-size: 17px; font-weight: 900; min-height: 32px;
 }
-QPushButton#generate:hover {
-    background: #edb34c;
-}
-QPushButton#linkButton {
-    background: transparent;
-    border: none;
-    color: #8f806d;
-    padding: 2px;
-    font-size: 12px;
-}
+QPushButton#generate:hover { background: #edb34c; }
+QPushButton#linkButton { background: transparent; border: none; color: #8f806d; padding: 2px; font-size: 12px; }
 QProgressBar {
-    background: #0d0b0e;
-    border: 1px solid #4e3b27;
-    border-radius: 7px;
-    text-align: center;
-    min-height: 20px;
+    background: #0d0b0e; border: 1px solid #4e3b27; border-radius: 7px;
+    text-align: center; min-height: 20px;
 }
-QProgressBar::chunk {
-    background: #d99d37;
-    border-radius: 6px;
-}
-QCheckBox {
-    spacing: 8px;
-}
+QProgressBar::chunk { background: #d99d37; border-radius: 6px; }
+QCheckBox { spacing: 8px; }
 ''')
     window = MainWindow()
     window.show()
