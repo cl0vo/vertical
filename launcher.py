@@ -1,23 +1,42 @@
 from __future__ import annotations
 
-import sys
+import ctypes
+import os
+
+
+_SINGLE_INSTANCE_HANDLE = None
+
+
+def _acquire_single_instance() -> bool:
+    global _SINGLE_INSTANCE_HANDLE
+    if os.name != "nt":
+        return True
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.CreateMutexW(None, False, "Local\\ARARA_Factory_Single_Instance")
+    if not handle:
+        return True
+    _SINGLE_INSTANCE_HANDLE = handle
+    already_exists = kernel32.GetLastError() == 183
+    if already_exists:
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            "ARARA Factory уже открыта. Используй текущее окно программы.",
+            "ARARA Factory",
+            0x40,
+        )
+        return False
+    return True
 
 
 def main() -> None:
-    from arara_factory.batch_worker import BatchRenderWorker
-
-    if '--batch' in sys.argv:
-        from arara_factory import batch_app as batch_module
-
-        batch_module.BatchRenderWorker = BatchRenderWorker
-        batch_module.main()
+    if not _acquire_single_instance():
         return
 
     from arara_factory import app as app_module
-    from arara_factory import integrated_batch as integrated_module
+    from arara_factory.integrated_batch import install
 
-    integrated_module.BatchRenderWorker = BatchRenderWorker
-    integrated_module.install(app_module)
+    install(app_module)
     app_module.main()
 
 
