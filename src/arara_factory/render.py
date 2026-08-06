@@ -12,7 +12,14 @@ from pathlib import Path
 
 from .audio import detect_pulses, extract_wav
 from .brainrot_index import choose_segment
-from .geometry import REFERENCE_HEIGHT, REFERENCE_WIDTH, canonical_layout
+from .geometry import (
+    DEFAULT_BRAINROT_TRANSFORM,
+    REFERENCE_HEIGHT,
+    REFERENCE_WIDTH,
+    NormalizedRect,
+    canonical_layout,
+    normalized_to_rect,
+)
 from .subtitles import arara_words_from_pulses, write_word_ass
 
 VIDEO_EXTS = {'.mp4', '.mov', '.mkv', '.webm', '.avi'}
@@ -45,6 +52,10 @@ class RenderOptions:
     source_start: float = 0.0
     clip_duration: float | None = None
     output_stem: str | None = None
+    brainrot_x: float = DEFAULT_BRAINROT_TRANSFORM.x
+    brainrot_y: float = DEFAULT_BRAINROT_TRANSFORM.y
+    brainrot_width: float = DEFAULT_BRAINROT_TRANSFORM.width
+    brainrot_height: float = DEFAULT_BRAINROT_TRANSFORM.height
 
 
 def _run(cmd: list[str], log) -> subprocess.CompletedProcess[str]:
@@ -189,6 +200,16 @@ def _segment_timing(info: MediaInfo, options: RenderOptions) -> tuple[float, flo
     return start, duration
 
 
+def _brain_rect(info: MediaInfo, options: RenderOptions):
+    normalized = NormalizedRect(
+        float(options.brainrot_x),
+        float(options.brainrot_y),
+        float(options.brainrot_width),
+        float(options.brainrot_height),
+    )
+    return normalized_to_rect(normalized, info.width, info.height)
+
+
 def _even(value: float) -> int:
     return max(2, int(round(value / 2.0) * 2))
 
@@ -261,7 +282,7 @@ def render_reels(
     source_info = probe_media(ffprobe, source)
     _validate_reel_format(source_info)
     source_start, reel_duration = _segment_timing(source_info, options)
-    _, brain_rect = canonical_layout(source_info.width, source_info.height)
+    brain_rect = _brain_rect(source_info, options)
 
     if options.clip_duration is None and source_info.duration > MAX_REEL_SECONDS + 0.05 and not options.preview_seconds:
         log(f'Reel {source_info.duration:.1f} сек автоматически обрезан до 15.0 сек.')
