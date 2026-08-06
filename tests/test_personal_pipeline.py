@@ -38,7 +38,7 @@ def test_full_lower_third_geometry_for_1080x1920() -> None:
     assert brainrot.height == 589
 
 
-def test_recognized_words_are_grouped_into_short_capcut_lines() -> None:
+def test_recognized_words_are_grouped_into_three_word_capcut_blocks() -> None:
     words = [
         RecognizedWord('это', 0.0, 0.3, 0.9),
         RecognizedWord('будет', 0.32, 0.7, 0.9),
@@ -47,8 +47,9 @@ def test_recognized_words_are_grouped_into_short_capcut_lines() -> None:
         RecognizedWord('сейчас', 1.38, 1.8, 0.9),
     ]
     groups = group_words(words)
-    assert len(groups) == 1
-    assert [word.text for word in groups[0].words] == ['это', 'будет', 'новый', 'тест', 'сейчас']
+    assert len(groups) == 2
+    assert [word.text for word in groups[0].words] == ['это', 'будет', 'новый']
+    assert [word.text for word in groups[1].words] == ['тест', 'сейчас']
 
 
 def test_long_pause_starts_a_new_caption_group() -> None:
