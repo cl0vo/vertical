@@ -22,6 +22,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install . pyinstaller
+      - name: Validate Python app
+        run: |
+          python -m compileall -q src
+          python -c "from arara_factory.app import MainWindow; from arara_factory.render import RenderOptions; from arara_factory.brainrot_index import get_index_info"
       - name: Download FFmpeg
         shell: powershell
         run: |
