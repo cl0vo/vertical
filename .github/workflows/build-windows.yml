@@ -6,7 +6,7 @@ on:
     branches: [main]
     paths:
       - 'src/**'
-      - 'assets/**'
+      - 'tests/**'
       - 'installer/**'
       - 'launcher.py'
       - 'pyproject.toml'
@@ -30,12 +30,13 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install . pyinstaller
+          pip install . pyinstaller pytest
 
       - name: Validate application
         run: |
           python -m compileall -q src launcher.py
           python -c "import arara_factory.app; import arara_factory.render; import arara_factory.brainrot_index; print('ARARA imports OK')"
+          pytest -q
 
       - name: Download FFmpeg
         shell: powershell
@@ -61,9 +62,6 @@ jobs:
             '--add-binary', 'ffmpeg.exe;.',
             '--add-binary', 'ffprobe.exe;.'
           )
-          if (Test-Path 'assets\arara_template.png') {
-            $pyiArgs += @('--add-data', 'assets\arara_template.png;assets')
-          }
           $pyiArgs += 'launcher.py'
           python -m PyInstaller @pyiArgs
 
