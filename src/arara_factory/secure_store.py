@@ -4,12 +4,10 @@ import base64
 import ctypes
 import json
 import os
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 
-@dataclass
 class _DataBlob(ctypes.Structure):
     _fields_ = [
         ("cbData", ctypes.c_uint32),
