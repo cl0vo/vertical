@@ -91,8 +91,9 @@ def check_for_update(current_version: str, timeout: int = 15) -> UpdateInfo | No
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
-            # The repository exists, but no permanent Release has been published yet.
-            return None
+            raise RuntimeError(
+                "GitHub Release ещё не опубликован. Дождись зелёной сборки Actions."
+            ) from exc
         raise RuntimeError(f"GitHub вернул ошибку HTTP {exc.code} при проверке обновления.") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError("Не удалось подключиться к GitHub для проверки обновления.") from exc
