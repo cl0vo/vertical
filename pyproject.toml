@@ -1,7 +1,7 @@
 [project]
 name = "arara-factory"
-version = "0.17.2"
-description = "Guided ARARA Factory with reliable publishing diagnostics and safe confirmed close"
+version = "0.17.3"
+description = "Guided ARARA Factory with resumable YouTube uploads, persistent diagnostics and safe confirmed close"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
