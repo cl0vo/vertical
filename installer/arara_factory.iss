@@ -1,5 +1,5 @@
 #define MyAppName "ARARA Factory"
-#define MyAppVersion "0.17.0"
+#define MyAppVersion "0.17.1"
 #define MyAppPublisher "ARARA"
 #define MyAppExeName "ARARA-Factory.exe"
 
