@@ -383,8 +383,6 @@ def _wait_tiktok_status(
         progress(82, f"TikTok · обработка {status or 'PROCESSING'}")
         time.sleep(3)
 
-    # The upload is already accepted. Returning publish_id avoids posting the same
-    # video twice merely because moderation took longer than the local wait window.
     progress(100, "TikTok · принято, обработка продолжается")
     return publish_id
 
@@ -625,7 +623,7 @@ def publish_youtube(
         str(video),
         mimetype="video/mp4",
         resumable=True,
-        chunksize=8 * 1024 * 1024,
+        chunksize=2 * 1024 * 1024,
     )
     request = service.videos().insert(
         part="snippet,status",
