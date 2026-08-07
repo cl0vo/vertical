@@ -40,6 +40,7 @@ def main() -> None:
     from .publishing_runtime_ui import install as install_publishing_runtime
     from .publishing_library_ui import install as install_publishing_library
     from .smart_ui import install as install_smart_ui
+    from .publishing_targets_ui import install as install_publishing_targets
 
     install_batch(app_module)
     install_publishing(app_module)
@@ -47,4 +48,5 @@ def main() -> None:
     install_publishing_runtime(app_module)
     install_publishing_library(app_module)
     install_smart_ui(app_module)
+    install_publishing_targets(app_module)
     app_module.main()
