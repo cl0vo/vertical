@@ -43,7 +43,7 @@ jobs:
         shell: pwsh
         run: |
           python -m compileall -q src launcher.py
-          python -c "import PySide6.QtMultimedia; import PySide6.QtMultimediaWidgets; import arara_factory.app; import arara_factory.batch; import arara_factory.batch_worker; import arara_factory.entry; import arara_factory.integrated_batch; import arara_factory.oauth_local; import arara_factory.preview; import arara_factory.process_utils; import arara_factory.publishing; import arara_factory.publishing_library; import arara_factory.publishing_library_ui; import arara_factory.publishing_ui; import arara_factory.publishing_oauth_ui; import arara_factory.publishing_runtime_ui; import arara_factory.secure_store; import arara_factory.smart_ui; import arara_factory.social_oauth; import arara_factory.updater; import googleapiclient.discovery; import googleapiclient.http; import google_auth_oauthlib.flow; import google.oauth2.credentials; print('ARARA guided UI imports OK')"
+          python -c "import PySide6.QtMultimedia; import PySide6.QtMultimediaWidgets; import arara_factory.app; import arara_factory.batch; import arara_factory.batch_worker; import arara_factory.entry; import arara_factory.integrated_batch; import arara_factory.oauth_local; import arara_factory.preview; import arara_factory.process_utils; import arara_factory.publishing; import arara_factory.publishing_library; import arara_factory.publishing_library_ui; import arara_factory.publishing_targets; import arara_factory.publishing_targets_ui; import arara_factory.publishing_ui; import arara_factory.publishing_oauth_ui; import arara_factory.publishing_runtime_ui; import arara_factory.secure_store; import arara_factory.smart_ui; import arara_factory.social_oauth; import arara_factory.updater; import googleapiclient.discovery; import googleapiclient.http; import google_auth_oauthlib.flow; import google.oauth2.credentials; print('ARARA target-aware UI imports OK')"
           @'
           import re
           import tomllib
@@ -83,27 +83,27 @@ jobs:
           '@ | python -
           pytest -q
 
-      - name: Smoke-test guided smart UI
+      - name: Smoke-test final target-aware UI
         shell: pwsh
         run: |
           $env:QT_QPA_PLATFORM = 'offscreen'
           @'
           from PySide6.QtWidgets import QApplication
-          from arara_factory.smart_ui import SmartMainWindow
+          from arara_factory.publishing import Platform
+          from arara_factory.publishing_targets_ui import TargetAwareSmartWindow
 
           app = QApplication([])
-          window = SmartMainWindow()
+          window = TargetAwareSmartWindow()
 
           assert window.mode_tabs.count() == 2
           assert window.mode_tabs.tabText(0) == 'Создать Reels'
           assert window.mode_tabs.tabText(1).startswith('Опубликовать')
-
           assert window.create_stack.count() == 4
           assert window.publish_stack.count() == 4
           assert len(window.create_step_buttons) == 4
           assert len(window.publish_step_buttons) == 4
-          assert window.create_stack.currentIndex() == 0
-          assert window.publish_stack.currentIndex() == 0
+          assert len(window.schedule_platform_boxes) == 3
+          assert set(window.schedule_platform_boxes) == set(Platform)
 
           assert window.reel_card.choose_button.text() == 'Выбрать видео'
           assert window.brainrot_card.choose_button.text() == 'Выбрать видео'
@@ -111,7 +111,6 @@ jobs:
           assert window.choose_folder_button.text() == 'Выбрать папку'
           assert window.schedule_selected_button.text() == 'Добавить в очередь'
           assert window.preview_button.text() == 'Превью 5 сек'
-
           assert window.delay_minutes.maximum() >= 10080
           assert window.interval.count() >= 3
           assert window.progress.parentWidget().objectName() == 'activityBar'
@@ -119,14 +118,14 @@ jobs:
           assert window.render_button.maximumWidth() <= 340
           assert window.schedule_selected_button.minimumWidth() >= 200
           assert window.publish_summary.wordWrap() is True
+          assert window.schedule_targets_card.isVisibleTo(window.publish_stack.widget(3))
 
-          # Future steps are intentionally locked until prior inputs are valid.
           assert not window.create_step_buttons[1].isEnabled()
           assert not window.publish_step_buttons[1].isEnabled()
 
           window.deleteLater()
           app.processEvents()
-          print('ARARA guided smart UI smoke test OK')
+          print('ARARA final target-aware UI smoke test OK')
           '@ | python -
 
       - name: Download FFmpeg
@@ -140,7 +139,7 @@ jobs:
           Copy-Item $bin.FullName ffmpeg.exe
           Copy-Item $probe.FullName ffprobe.exe
 
-      - name: Smoke-test transactional FFmpeg render and frame zero
+      - name: Smoke-test transactional FFmpeg render and target-aware queue
         shell: powershell
         run: |
           .\ffmpeg.exe -y -hide_banner -loglevel error -f lavfi -i "color=c=blue:s=270x480:r=30" -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 9 -shortest -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac smoke-reel.mp4
@@ -151,6 +150,7 @@ jobs:
           from PIL import Image
           from arara_factory.geometry import canonical_layout
           from arara_factory.publishing import Platform, PublishQueue
+          from arara_factory.publishing_targets import prune_unselected_targets
           from arara_factory.render import RenderOptions, _binary, probe_media, render_reels
 
           progress_values = []
@@ -183,11 +183,13 @@ jobs:
               start_at=1000,
           )
           assert len(jobs) == 1
-          queue.update_delivery(jobs[0], Platform.YOUTUBE, status='success', remote_id='test')
-          queue.update_delivery(jobs[0], Platform.TIKTOK, status='failed', error='test')
+          queue.update_delivery(jobs[0], Platform.TIKTOK, status='failed', error='not connected')
+          queue.update_delivery(jobs[0], Platform.INSTAGRAM, status='failed', error='not connected')
+          result = prune_unselected_targets(queue, [Platform.YOUTUBE])
+          assert result.removed_deliveries == 2, result
           restored = PublishQueue(Path('smoke-publishing-queue.json')).jobs[0]
-          assert Platform.YOUTUBE not in restored.pending_platforms
-          assert Platform.TIKTOK in restored.pending_platforms
+          assert restored.pending_platforms == [Platform.YOUTUBE], restored.pending_platforms
+          assert set(restored.deliveries) == {'youtube'}, restored.deliveries
 
           ffprobe = _binary('ffprobe')
           ffmpeg = _binary('ffmpeg')
@@ -206,7 +208,7 @@ jobs:
           assert pixel[0] > 120 and pixel[0] > pixel[2] + 60, (
               'Brainrot is missing on output frame zero', pixel
           )
-          print(f'ARARA smoke render and queue OK: {made[0]} ({info.duration:.3f}s)')
+          print(f'ARARA render and target-aware queue OK: {made[0]} ({info.duration:.3f}s)')
           '@ | python -
 
       - name: Build installed application directory
@@ -227,6 +229,8 @@ jobs:
             '--hidden-import', 'arara_factory.publishing',
             '--hidden-import', 'arara_factory.publishing_library',
             '--hidden-import', 'arara_factory.publishing_library_ui',
+            '--hidden-import', 'arara_factory.publishing_targets',
+            '--hidden-import', 'arara_factory.publishing_targets_ui',
             '--hidden-import', 'arara_factory.publishing_ui',
             '--hidden-import', 'arara_factory.publishing_oauth_ui',
             '--hidden-import', 'arara_factory.publishing_runtime_ui',
@@ -304,7 +308,7 @@ jobs:
           if ($exists) {
             gh release upload $tag $asset --repo $repo --clobber
           } else {
-            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "Guided UI redesign: Create Reels and Publish now use four clear steps each. Readable fixed-size actions, scene review, batch summary, folder/file publishing, exact first/last scheduled post preview, shared progress, OAuth and persistent no-duplicate queue."
+            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "Publishing target fix: final Schedule step now has visible platform checkboxes. Unselected or disconnected platforms are pruned from unfinished retries, so a YouTube-only setup no longer retries TikTok or Instagram. Progress is calculated only for active targets."
           }
           if ($LASTEXITCODE -ne 0) { throw 'GitHub Release was not published' }
 
