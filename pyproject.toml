@@ -1,7 +1,7 @@
 [project]
 name = "arara-factory"
-version = "0.16.0"
-description = "Smart two-workflow ARARA Factory for Reel creation and scheduled publishing"
+version = "0.17.0"
+description = "Guided step-by-step ARARA Factory for Reel creation and scheduled publishing"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
