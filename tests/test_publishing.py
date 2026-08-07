@@ -8,6 +8,7 @@ from arara_factory.publishing import (
     publish_instagram,
     publish_tiktok,
 )
+from arara_factory.publishing_targets import prune_unselected_targets
 
 
 def _video(tmp_path: Path, name: str = "reel.mp4", size: int = 1024) -> Path:
@@ -103,6 +104,49 @@ def test_retry_failed_keeps_successful_deliveries(tmp_path: Path) -> None:
     assert queue.retry_failed_now() == 1
     assert job.deliveries[Platform.TIKTOK.value].status == "pending"
     assert job.deliveries[Platform.YOUTUBE.value].status == "success"
+
+
+def test_youtube_only_selection_prunes_old_tiktok_and_instagram_retries(tmp_path: Path) -> None:
+    queue = PublishQueue(tmp_path / "queue.json")
+    video = _video(tmp_path)
+    job = queue.enqueue(
+        [video],
+        [Platform.TIKTOK, Platform.INSTAGRAM, Platform.YOUTUBE],
+        "ARARA",
+        15,
+        start_at=1.0,
+    )[0]
+    queue.update_delivery(job, Platform.TIKTOK, status="failed", error="not connected")
+    queue.update_delivery(job, Platform.INSTAGRAM, status="failed", error="not connected")
+
+    result = prune_unselected_targets(queue, [Platform.YOUTUBE])
+
+    assert result.removed_deliveries == 2
+    assert set(job.deliveries) == {Platform.YOUTUBE.value}
+    assert job.pending_platforms == [Platform.YOUTUBE]
+    restored = PublishQueue(tmp_path / "queue.json").jobs[0]
+    assert set(restored.deliveries) == {Platform.YOUTUBE.value}
+
+
+def test_pruning_preserves_success_history_but_completes_job(tmp_path: Path) -> None:
+    queue = PublishQueue(tmp_path / "queue.json")
+    video = _video(tmp_path)
+    job = queue.enqueue(
+        [video],
+        [Platform.TIKTOK, Platform.INSTAGRAM, Platform.YOUTUBE],
+        "ARARA",
+        15,
+        start_at=1.0,
+    )[0]
+    queue.update_delivery(job, Platform.YOUTUBE, status="success", remote_id="yt-done")
+    queue.update_delivery(job, Platform.TIKTOK, status="failed", error="not connected")
+    queue.update_delivery(job, Platform.INSTAGRAM, status="failed", error="not connected")
+
+    prune_unselected_targets(queue, [Platform.YOUTUBE])
+
+    assert job.done
+    assert set(job.deliveries) == {Platform.YOUTUBE.value}
+    assert job.deliveries[Platform.YOUTUBE.value].remote_id == "yt-done"
 
 
 def test_tiktok_uses_creator_privacy_and_confirms_publish_status(
