@@ -118,7 +118,7 @@ jobs:
           assert window.render_button.minimumWidth() >= 230
           assert window.render_button.maximumWidth() <= 340
           assert window.schedule_selected_button.minimumWidth() >= 200
-          assert window.publish_summary.isWordWrap()
+          assert window.publish_summary.wordWrap() is True
 
           # Future steps are intentionally locked until prior inputs are valid.
           assert not window.create_step_buttons[1].isEnabled()
