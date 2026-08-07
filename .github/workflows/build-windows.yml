@@ -43,7 +43,7 @@ jobs:
         shell: pwsh
         run: |
           python -m compileall -q src launcher.py
-          python -c "import PySide6.QtMultimedia; import PySide6.QtMultimediaWidgets; import arara_factory.app; import arara_factory.batch; import arara_factory.batch_worker; import arara_factory.entry; import arara_factory.integrated_batch; import arara_factory.oauth_local; import arara_factory.preview; import arara_factory.process_utils; import arara_factory.publishing; import arara_factory.publishing_library; import arara_factory.publishing_library_ui; import arara_factory.publishing_ui; import arara_factory.publishing_oauth_ui; import arara_factory.publishing_runtime_ui; import arara_factory.secure_store; import arara_factory.smart_ui; import arara_factory.social_oauth; import arara_factory.updater; import googleapiclient.discovery; import googleapiclient.http; import google_auth_oauthlib.flow; import google.oauth2.credentials; print('ARARA smart UI imports OK')"
+          python -c "import PySide6.QtMultimedia; import PySide6.QtMultimediaWidgets; import arara_factory.app; import arara_factory.batch; import arara_factory.batch_worker; import arara_factory.entry; import arara_factory.integrated_batch; import arara_factory.oauth_local; import arara_factory.preview; import arara_factory.process_utils; import arara_factory.publishing; import arara_factory.publishing_library; import arara_factory.publishing_library_ui; import arara_factory.publishing_ui; import arara_factory.publishing_oauth_ui; import arara_factory.publishing_runtime_ui; import arara_factory.secure_store; import arara_factory.smart_ui; import arara_factory.social_oauth; import arara_factory.updater; import googleapiclient.discovery; import googleapiclient.http; import google_auth_oauthlib.flow; import google.oauth2.credentials; print('ARARA guided UI imports OK')"
           @'
           import re
           import tomllib
@@ -83,7 +83,7 @@ jobs:
           '@ | python -
           pytest -q
 
-      - name: Smoke-test smart two-workflow UI
+      - name: Smoke-test guided smart UI
         shell: pwsh
         run: |
           $env:QT_QPA_PLATFORM = 'offscreen'
@@ -93,23 +93,40 @@ jobs:
 
           app = QApplication([])
           window = SmartMainWindow()
+
           assert window.mode_tabs.count() == 2
           assert window.mode_tabs.tabText(0) == 'Создать Reels'
           assert window.mode_tabs.tabText(1).startswith('Опубликовать')
-          assert window.reel_card.isWidgetType()
-          assert window.brainrot_card.isWidgetType()
-          assert window.preview_panel.isWidgetType()
+
+          assert window.create_stack.count() == 4
+          assert window.publish_stack.count() == 4
+          assert len(window.create_step_buttons) == 4
+          assert len(window.publish_step_buttons) == 4
+          assert window.create_stack.currentIndex() == 0
+          assert window.publish_stack.currentIndex() == 0
+
+          assert window.reel_card.choose_button.text() == 'Выбрать видео'
+          assert window.brainrot_card.choose_button.text() == 'Выбрать видео'
           assert window.choose_reels_button.text() == 'Выбрать файлы'
           assert window.choose_folder_button.text() == 'Выбрать папку'
-          assert window.schedule_selected_button.text() == 'ДОБАВИТЬ В ОЧЕРЕДЬ'
+          assert window.schedule_selected_button.text() == 'Добавить в очередь'
+          assert window.preview_button.text() == 'Превью 5 сек'
+
           assert window.delay_minutes.maximum() >= 10080
           assert window.interval.count() >= 3
           assert window.progress.parentWidget().objectName() == 'activityBar'
-          assert window.render_button.maximumWidth() <= 300
-          assert window.schedule_selected_button.maximumWidth() <= 245
+          assert window.render_button.minimumWidth() >= 230
+          assert window.render_button.maximumWidth() <= 340
+          assert window.schedule_selected_button.minimumWidth() >= 200
+          assert window.publish_summary.isWordWrap()
+
+          # Future steps are intentionally locked until prior inputs are valid.
+          assert not window.create_step_buttons[1].isEnabled()
+          assert not window.publish_step_buttons[1].isEnabled()
+
           window.deleteLater()
           app.processEvents()
-          print('ARARA smart UI smoke test OK')
+          print('ARARA guided smart UI smoke test OK')
           '@ | python -
 
       - name: Download FFmpeg
@@ -287,7 +304,7 @@ jobs:
           if ($exists) {
             gh release upload $tag $asset --repo $repo --clobber
           } else {
-            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "Smart two-workflow UI: Create Reels and Publish. Batch file/folder selection, delayed scheduling, fixed-width actions, shared progress, official platform OAuth and persistent no-duplicate queue."
+            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "Guided UI redesign: Create Reels and Publish now use four clear steps each. Readable fixed-size actions, scene review, batch summary, folder/file publishing, exact first/last scheduled post preview, shared progress, OAuth and persistent no-duplicate queue."
           }
           if ($LASTEXITCODE -ne 0) { throw 'GitHub Release was not published' }
 
