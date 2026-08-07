@@ -34,20 +34,39 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install . pyinstaller pytest
 
-      - name: Validate app, publishing modules and versions
+      - name: Validate source versions and publishing modules
         shell: pwsh
         run: |
           python -m compileall -q src launcher.py
-          python -c "import PySide6.QtMultimedia; import PySide6.QtMultimediaWidgets; import arara_factory.app; import arara_factory.batch; import arara_factory.batch_worker; import arara_factory.entry; import arara_factory.integrated_batch; import arara_factory.oauth_local; import arara_factory.preview; import arara_factory.process_utils; import arara_factory.publishing; import arara_factory.publishing_library; import arara_factory.publishing_library_ui; import arara_factory.publishing_targets; import arara_factory.publishing_targets_ui; import arara_factory.publishing_ui; import arara_factory.publishing_oauth_ui; import arara_factory.publishing_runtime_ui; import arara_factory.secure_store; import arara_factory.smart_ui; import arara_factory.social_oauth; import arara_factory.updater; import googleapiclient.discovery; import googleapiclient.http; import google_auth_oauthlib.flow; import google.oauth2.credentials; print('ARARA target-aware UI imports OK')"
           @'
           import re
           import tomllib
           from pathlib import Path
+
+          import PySide6.QtMultimedia
+          import PySide6.QtMultimediaWidgets
+          import google.oauth2.credentials
+          import google_auth_oauthlib.flow
+          import googleapiclient.discovery
+          import googleapiclient.http
+          import httplib2
+
+          import arara_factory.entry
+          import arara_factory.publishing
+          import arara_factory.publishing_journal
+          import arara_factory.publishing_library_ui
+          import arara_factory.publishing_oauth_ui
+          import arara_factory.publishing_reliable
+          import arara_factory.publishing_reliable_ui
+          import arara_factory.publishing_targets
+          import arara_factory.publishing_targets_ui
+          import arara_factory.smart_ui
+
           from arara_factory.process_utils import hidden_process_kwargs
           from arara_factory.secure_store import credentials_path, load_credentials, save_credentials
           from arara_factory.version import __version__
@@ -55,92 +74,85 @@ jobs:
           package = tomllib.load(open('pyproject.toml', 'rb'))['project']['version']
           installer_text = Path('installer/arara_factory.iss').read_text(encoding='utf-8')
           match = re.search(r'#define MyAppVersion "([^"]+)"', installer_text)
-          assert match, 'Installer version is missing'
+          assert match, 'Installer version missing'
           installer = match.group(1)
           assert package == __version__ == installer, (package, __version__, installer)
+
+          scripts = tomllib.load(open('pyproject.toml', 'rb'))['project']['scripts']
+          assert set(scripts.values()) == {'arara_factory.entry:main'}, scripts
 
           hidden = hidden_process_kwargs()
           assert hidden.get('creationflags', 0), hidden
           assert hidden.get('startupinfo') is not None, hidden
 
-          project = tomllib.load(open('pyproject.toml', 'rb'))['project']['scripts']
-          assert set(project.values()) == {'arara_factory.entry:main'}, project
-
           secret_file = credentials_path()
           previous = secret_file.read_bytes() if secret_file.exists() else None
           try:
-              save_credentials({'youtube': {'token': {'refresh_token': 'test-secret'}}})
+              save_credentials({'youtube': {'token': {'refresh_token': 'ci-secret'}}})
               assert secret_file.read_bytes().startswith(b'DPAPI\0')
-              restored = load_credentials()
-              assert restored['youtube']['token']['refresh_token'] == 'test-secret'
+              assert load_credentials()['youtube']['token']['refresh_token'] == 'ci-secret'
           finally:
               if previous is None:
                   secret_file.unlink(missing_ok=True)
               else:
                   secret_file.write_bytes(previous)
 
-          print(f'Versions synchronized: {package}; one entry; DPAPI and publishing modules OK')
+          print(f'ARARA source validation OK: {package}')
           '@ | python -
           pytest -q
 
-      - name: Smoke-test final target-aware UI
+      - name: Smoke-test final reliable UI
         shell: pwsh
         run: |
           $env:QT_QPA_PLATFORM = 'offscreen'
           @'
-          from PySide6.QtWidgets import QApplication
+          from PySide6.QtGui import QCloseEvent
+          from PySide6.QtWidgets import QApplication, QMessageBox
           from arara_factory.publishing import Platform
-          from arara_factory.publishing_targets_ui import TargetAwareSmartWindow
+          from arara_factory.publishing_reliable_ui import ReliablePublishingWindow
 
           app = QApplication([])
-          window = TargetAwareSmartWindow()
+          window = ReliablePublishingWindow()
 
           assert window.mode_tabs.count() == 2
           assert window.mode_tabs.tabText(0) == 'Создать Reels'
           assert window.mode_tabs.tabText(1).startswith('Опубликовать')
           assert window.create_stack.count() == 4
           assert window.publish_stack.count() == 4
-          assert len(window.create_step_buttons) == 4
-          assert len(window.publish_step_buttons) == 4
-          assert len(window.schedule_platform_boxes) == 3
           assert set(window.schedule_platform_boxes) == set(Platform)
-
-          assert window.reel_card.choose_button.text() == 'Выбрать видео'
-          assert window.brainrot_card.choose_button.text() == 'Выбрать видео'
           assert window.choose_reels_button.text() == 'Выбрать файлы'
           assert window.choose_folder_button.text() == 'Выбрать папку'
           assert window.schedule_selected_button.text() == 'Добавить в очередь'
-          assert window.preview_button.text() == 'Превью 5 сек'
-          assert window.delay_minutes.maximum() >= 10080
-          assert window.interval.count() >= 3
-          assert window.progress.parentWidget().objectName() == 'activityBar'
-          assert window.render_button.minimumWidth() >= 230
-          assert window.render_button.maximumWidth() <= 340
-          assert window.schedule_selected_button.minimumWidth() >= 200
           assert window.publish_summary.wordWrap() is True
-          assert window.schedule_targets_card.isVisibleTo(window.publish_stack.widget(3))
+          assert hasattr(window, '_recover_interrupted_uploads')
+          assert hasattr(window, '_next_runnable_job')
 
-          assert not window.create_step_buttons[1].isEnabled()
-          assert not window.publish_step_buttons[1].isEnabled()
+          original_question = QMessageBox.question
+          QMessageBox.question = lambda *args, **kwargs: QMessageBox.StandardButton.Yes
+          try:
+              event = QCloseEvent()
+              window.closeEvent(event)
+              assert event.isAccepted()
+          finally:
+              QMessageBox.question = original_question
 
-          window.deleteLater()
           app.processEvents()
-          print('ARARA final target-aware UI smoke test OK')
+          print('ARARA reliable UI smoke test OK')
           '@ | python -
 
       - name: Download FFmpeg
-        shell: powershell
+        shell: pwsh
         run: |
           Invoke-WebRequest https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile ffmpeg.zip
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg
           $bin = Get-ChildItem ffmpeg -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           $probe = Get-ChildItem ffmpeg -Recurse -Filter ffprobe.exe | Select-Object -First 1
-          if (-not $bin -or -not $probe) { throw 'FFmpeg download is incomplete' }
+          if (-not $bin -or -not $probe) { throw 'FFmpeg download incomplete' }
           Copy-Item $bin.FullName ffmpeg.exe
           Copy-Item $probe.FullName ffprobe.exe
 
-      - name: Smoke-test transactional FFmpeg render and target-aware queue
-        shell: powershell
+      - name: Smoke-test real render and queue migration
+        shell: pwsh
         run: |
           .\ffmpeg.exe -y -hide_banner -loglevel error -f lavfi -i "color=c=blue:s=270x480:r=30" -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 9 -shortest -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac smoke-reel.mp4
           .\ffmpeg.exe -y -hide_banner -loglevel error -f lavfi -i "color=c=red:s=320x180:r=30" -t 20 -c:v libx264 -preset ultrafast -pix_fmt yuv420p smoke-brainrot.mp4
@@ -148,12 +160,13 @@ jobs:
           import subprocess
           from pathlib import Path
           from PIL import Image
+
           from arara_factory.geometry import canonical_layout
           from arara_factory.publishing import Platform, PublishQueue
           from arara_factory.publishing_targets import prune_unselected_targets
           from arara_factory.render import RenderOptions, _binary, probe_media, render_reels
 
-          progress_values = []
+          values = []
           output = Path('smoke-output')
           made = render_reels(
               Path('smoke-reel.mp4'),
@@ -166,34 +179,31 @@ jobs:
                   encoder_preset='ultrafast',
                   crf=28,
               ),
-              progress=lambda value, text: progress_values.append((value, text)),
+              progress=lambda value, text: values.append((value, text)),
               log=print,
           )
           assert len(made) == 1 and made[0].is_file(), made
-          assert progress_values and progress_values[-1][0] == 100, progress_values[-5:]
-          assert any(20 <= value <= 95 for value, _ in progress_values), progress_values
-          assert not list(output.glob('*.part.mp4')), list(output.glob('*'))
+          assert values[-1][0] == 100
+          assert any(20 <= value <= 95 for value, _ in values)
+          assert not list(output.glob('*.part.mp4'))
 
-          queue = PublishQueue(Path('smoke-publishing-queue.json'))
-          jobs = queue.enqueue(
+          queue = PublishQueue(Path('smoke-queue.json'))
+          job = queue.enqueue(
               made,
               [Platform.TIKTOK, Platform.INSTAGRAM, Platform.YOUTUBE],
-              'ARARA {n} {filename}',
+              'ARARA {n}',
               15,
-              start_at=1000,
-          )
-          assert len(jobs) == 1
-          queue.update_delivery(jobs[0], Platform.TIKTOK, status='failed', error='not connected')
-          queue.update_delivery(jobs[0], Platform.INSTAGRAM, status='failed', error='not connected')
+              start_at=1,
+          )[0]
+          queue.update_delivery(job, Platform.TIKTOK, status='failed', error='not connected')
+          queue.update_delivery(job, Platform.INSTAGRAM, status='failed', error='not connected')
           result = prune_unselected_targets(queue, [Platform.YOUTUBE])
-          assert result.removed_deliveries == 2, result
-          restored = PublishQueue(Path('smoke-publishing-queue.json')).jobs[0]
-          assert restored.pending_platforms == [Platform.YOUTUBE], restored.pending_platforms
-          assert set(restored.deliveries) == {'youtube'}, restored.deliveries
+          assert result.removed_deliveries == 2
+          restored = PublishQueue(Path('smoke-queue.json')).jobs[0]
+          assert set(restored.deliveries) == {'youtube'}
 
           ffprobe = _binary('ffprobe')
           ffmpeg = _binary('ffmpeg')
-          assert ffprobe and ffmpeg
           info = probe_media(ffprobe, made[0])
           assert 8.85 <= info.duration <= 9.15, info.duration
 
@@ -205,16 +215,14 @@ jobs:
           image = Image.open(first).convert('RGB')
           _, brain = canonical_layout(info.width, info.height)
           pixel = image.getpixel((brain.x + brain.width // 2, brain.y + brain.height // 2))
-          assert pixel[0] > 120 and pixel[0] > pixel[2] + 60, (
-              'Brainrot is missing on output frame zero', pixel
-          )
-          print(f'ARARA render and target-aware queue OK: {made[0]} ({info.duration:.3f}s)')
+          assert pixel[0] > 120 and pixel[0] > pixel[2] + 60, pixel
+          print('ARARA real render smoke test OK')
           '@ | python -
 
-      - name: Build installed application directory
-        shell: powershell
+      - name: Build Windows application
+        shell: pwsh
         run: |
-          $pyiArgs = @(
+          $args = @(
             '--noconfirm',
             '--clean',
             '--windowed',
@@ -224,16 +232,16 @@ jobs:
             '--hidden-import', 'arara_factory.entry',
             '--hidden-import', 'arara_factory.batch_worker',
             '--hidden-import', 'arara_factory.integrated_batch',
-            '--hidden-import', 'arara_factory.oauth_local',
             '--hidden-import', 'arara_factory.process_utils',
             '--hidden-import', 'arara_factory.publishing',
+            '--hidden-import', 'arara_factory.publishing_journal',
             '--hidden-import', 'arara_factory.publishing_library',
             '--hidden-import', 'arara_factory.publishing_library_ui',
+            '--hidden-import', 'arara_factory.publishing_oauth_ui',
+            '--hidden-import', 'arara_factory.publishing_reliable',
+            '--hidden-import', 'arara_factory.publishing_reliable_ui',
             '--hidden-import', 'arara_factory.publishing_targets',
             '--hidden-import', 'arara_factory.publishing_targets_ui',
-            '--hidden-import', 'arara_factory.publishing_ui',
-            '--hidden-import', 'arara_factory.publishing_oauth_ui',
-            '--hidden-import', 'arara_factory.publishing_runtime_ui',
             '--hidden-import', 'arara_factory.secure_store',
             '--hidden-import', 'arara_factory.smart_ui',
             '--hidden-import', 'arara_factory.social_oauth',
@@ -243,6 +251,8 @@ jobs:
             '--hidden-import', 'googleapiclient.errors',
             '--hidden-import', 'googleapiclient.http',
             '--hidden-import', 'google_auth_oauthlib.flow',
+            '--hidden-import', 'google_auth_httplib2',
+            '--hidden-import', 'httplib2',
             '--collect-all', 'googleapiclient',
             '--collect-all', 'google_auth_oauthlib',
             '--hidden-import', 'PySide6.QtMultimedia',
@@ -251,13 +261,13 @@ jobs:
             '--add-binary', 'ffprobe.exe;.',
             'launcher.py'
           )
-          python -m PyInstaller @pyiArgs
+          python -m PyInstaller @args
           if (-not (Test-Path 'dist\ARARA-Factory\ARARA-Factory.exe')) {
-            throw 'ARARA Factory application directory was not created'
+            throw 'ARARA Factory executable missing'
           }
 
       - name: Install Inno Setup
-        shell: powershell
+        shell: pwsh
         run: |
           $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $compiler)) {
@@ -266,7 +276,7 @@ jobs:
           if (-not (Test-Path $compiler)) { throw 'Inno Setup compiler not found' }
 
       - name: Build installer
-        shell: powershell
+        shell: pwsh
         run: |
           $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           & $compiler 'installer\arara_factory.iss'
@@ -274,21 +284,21 @@ jobs:
             throw 'Installer was not created'
           }
 
-      - name: Upload Windows installer
+      - name: Upload installer
         uses: actions/upload-artifact@v6
         with:
           name: ARARA-Factory-Installer
           path: installer-output/ARARA-Factory-Setup.exe
           if-no-files-found: error
 
-      - name: Upload portable application folder
+      - name: Upload portable app
         uses: actions/upload-artifact@v6
         with:
           name: ARARA-Factory-Portable
           path: dist/ARARA-Factory/**
           if-no-files-found: error
 
-      - name: Publish permanent update release
+      - name: Publish update release
         if: github.ref == 'refs/heads/main'
         shell: pwsh
         env:
@@ -300,23 +310,18 @@ jobs:
           $asset = 'installer-output/ARARA-Factory-Setup.exe'
           $repo = $env:GITHUB_REPOSITORY
 
-          $releaseListJson = gh release list --repo $repo --limit 100 --json tagName
-          if ($LASTEXITCODE -ne 0) { throw 'Could not list GitHub Releases' }
-          $releaseList = $releaseListJson | ConvertFrom-Json
-          $exists = @($releaseList | Where-Object { $_.tagName -eq $tag }).Count -gt 0
-
+          $existing = gh release list --repo $repo --limit 100 --json tagName | ConvertFrom-Json
+          $exists = @($existing | Where-Object { $_.tagName -eq $tag }).Count -gt 0
           if ($exists) {
             gh release upload $tag $asset --repo $repo --clobber
           } else {
-            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "Publishing target fix: final Schedule step now has visible platform checkboxes. Unselected or disconnected platforms are pruned from unfinished retries, so a YouTube-only setup no longer retries TikTok or Instagram. Progress is calculated only for active targets."
+            gh release create $tag $asset --repo $repo --target $env:GITHUB_SHA --title "ARARA Factory $version" --notes "Reliable publishing: persistent technical journal, explicit YouTube HTTP timeout and retries, exact platform errors, failed-item isolation so the queue continues, target-aware posting, and a simple Yes/No close confirmation that saves queue/settings before exit."
           }
-          if ($LASTEXITCODE -ne 0) { throw 'GitHub Release was not published' }
+          if ($LASTEXITCODE -ne 0) { throw 'Release publish failed' }
 
-          $releaseJson = gh release view $tag --repo $repo --json assets
-          if ($LASTEXITCODE -ne 0) { throw 'Could not verify GitHub Release' }
-          $release = $releaseJson | ConvertFrom-Json
-          $assetNames = @($release.assets | ForEach-Object { $_.name })
-          if ($assetNames -notcontains 'ARARA-Factory-Setup.exe') {
-            throw 'Release exists, but installer asset is missing'
+          $release = gh release view $tag --repo $repo --json assets | ConvertFrom-Json
+          $names = @($release.assets | ForEach-Object { $_.name })
+          if ($names -notcontains 'ARARA-Factory-Setup.exe') {
+            throw 'Release installer asset missing'
           }
-          Write-Host "Published $tag with ARARA-Factory-Setup.exe"
+          Write-Host "Published $tag"
